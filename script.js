@@ -1,10 +1,10 @@
 /* ---------------------------------------------------------
    MEME PARTY — demo de juego multijugador de memes
-   Estado compartido vía localStorage.
-   IMPORTANTE: localStorage solo sincroniza entre pestañas/ventanas
-   del MISMO navegador. Para jugar entre dispositivos distintos
-   (celulares, computadoras diferentes) se necesita un servidor
-   real (WebSockets, Firebase, etc.).
+   Estado compartido vía Firebase Realtime Database, así que ahora sí
+   sincroniza entre dispositivos distintos (celulares, computadoras
+   diferentes), no solo entre pestañas del mismo navegador.
+   La configuración e inicialización de Firebase están en index.html
+   (deben cargarse ANTES que este archivo).
    --------------------------------------------------------- */
 
 // Silueta genérica gris — se usa como foto de perfil para cualquier jugador
@@ -111,36 +111,32 @@ let newTplDrafts = [];      // borrador por archivo: {imageData, name, boxes} | 
 let newTplBoxes = [];       // recuadros del archivo actualmente en pantalla (referencia al borrador)
 let drawingBox = null;
 
-// ---------- Helpers de almacenamiento (localStorage) ----------
+// ---------- Helpers de almacenamiento (Firebase Realtime Database) ----------
+// Estas funciones mantienen la MISMA firma que antes (síncronas, sin
+// promesas) para no tener que tocar el resto del juego: loadRoom()/
+// loadTemplates() devuelven al instante la última copia recibida de
+// Firebase (guardada en las variables `room`/`templates`), y saveRoom()/
+// saveTemplates() actualizan esa copia local de inmediato (para que el
+// resto del código que sigue ejecutándose en la misma función ya la vea
+// actualizada) y además la mandan a Firebase en segundo plano.
+// La sincronización real en tiempo real entre dispositivos pasa por los
+// listeners `.on('value', ...)` que están al final del archivo.
+const dbRoomRef = firebase.database().ref(ROOM_KEY);
+const dbTplRef = firebase.database().ref(TPL_KEY);
+
 function loadRoom(){
-  try{
-    const v = localStorage.getItem(ROOM_KEY);
-    return v ? JSON.parse(v) : JSON.parse(JSON.stringify(DEFAULT_ROOM));
-  }catch(e){
-    console.error('No se pudo leer la sala', e);
-    return JSON.parse(JSON.stringify(DEFAULT_ROOM));
-  }
+  return room ? JSON.parse(JSON.stringify(room)) : JSON.parse(JSON.stringify(DEFAULT_ROOM));
 }
 function saveRoom(r){
   room = r;
-  try{ localStorage.setItem(ROOM_KEY, JSON.stringify(r)); }
-  catch(e){ console.error('No se pudo guardar la sala', e); }
+  dbRoomRef.set(r).catch(e=>console.error('No se pudo guardar la sala en Firebase', e));
 }
 function loadTemplates(){
-  try{
-    const v = localStorage.getItem(TPL_KEY);
-    const arr = v ? JSON.parse(v) : null;
-    return (arr && arr.length) ? arr : builtinTemplates();
-  }catch(e){
-    const b = builtinTemplates();
-    try{ localStorage.setItem(TPL_KEY, JSON.stringify(b)); }catch(_e){}
-    return b;
-  }
+  return (templates && templates.length) ? templates : builtinTemplates();
 }
 function saveTemplates(arr){
   templates = arr;
-  try{ localStorage.setItem(TPL_KEY, JSON.stringify(arr)); }
-  catch(e){ console.error('No se pudieron guardar las plantillas', e); }
+  dbTplRef.set(arr).catch(e=>console.error('No se pudieron guardar las plantillas en Firebase', e));
 }
 
 function tplById(id){ return templates.find(t => t.id === id); }
@@ -233,6 +229,7 @@ renderAvatarPreview();
 
 // ---------- Login / unirse a la sala ----------
 document.getElementById('btnJoin').onclick = ()=>{
+  if(!firebaseSynced.room || !firebaseSynced.templates) return; // aún conectando con Firebase
   const name = document.getElementById('loginName').value.trim();
   const errEl = document.getElementById('loginError');
   if(!name){
@@ -1345,21 +1342,53 @@ function escapeHtml(s){
   return (s||'').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
 
-// ---------- Sincronización ----------
-// 'storage' se dispara cuando OTRA pestaña del mismo navegador cambia localStorage.
-window.addEventListener('storage', (e)=>{
-  if(e.key === ROOM_KEY || e.key === TPL_KEY) pollLoop();
-});
+// ---------- Sincronización en tiempo real con Firebase ----------
+// A diferencia del sondeo (setInterval) que usábamos con localStorage, acá
+// Firebase EMPUJA los cambios apenas ocurren — no hay que preguntar cada
+// cierto tiempo. `firebaseSynced` evita que alguien pueda "entrar a la
+// sala" antes de que llegue el primer dato real desde Firebase, lo cual
+// podría sobrescribir por accidente la sala de otros jugadores ya
+// conectados con una sala vacía.
+let firebaseSynced = { room: false, templates: false };
 
-function pollLoop(){
-  if(joined){
-    room = loadRoom();
-    templates = loadTemplates();
-    if(ensureValidHost(room)) saveRoom(room);
-    render();
+function checkFirebaseReadyForJoin(){
+  const ready = firebaseSynced.room && firebaseSynced.templates;
+  const btn = document.getElementById('btnJoin');
+  if(btn){
+    btn.disabled = !ready;
+    btn.textContent = ready ? 'Entrar a la sala' : 'Conectando...';
   }
 }
-setInterval(pollLoop, 1500);
+
+dbRoomRef.on('value', snapshot=>{
+  const val = snapshot.val();
+  room = val || JSON.parse(JSON.stringify(DEFAULT_ROOM));
+  if(ensureValidHost(room)) saveRoom(room);
+  firebaseSynced.room = true;
+  checkFirebaseReadyForJoin();
+  render();
+}, error=>{
+  console.error('Error de conexión con Firebase (sala):', error);
+});
+
+dbTplRef.on('value', snapshot=>{
+  const val = snapshot.val();
+  templates = (val && val.length) ? val : builtinTemplates();
+  firebaseSynced.templates = true;
+  checkFirebaseReadyForJoin();
+  render();
+}, error=>{
+  console.error('Error de conexión con Firebase (plantillas):', error);
+});
+
+// Los avances automáticos por tiempo (fin de turno de captión, de votación,
+// de la pantalla de resultados) dependen del reloj, no de que llegue un
+// dato nuevo de Firebase — por eso seguimos re-evaluando render() cada
+// segundo además de reaccionar a los cambios en tiempo real de arriba.
+// Esto NO genera lecturas de red: solo reutiliza la copia local ya
+// sincronizada.
+setInterval(()=>{ if(joined) render(); }, 1000);
 setInterval(updateTimerDisplay, 500);
 
+checkFirebaseReadyForJoin();
 showScreen('login');

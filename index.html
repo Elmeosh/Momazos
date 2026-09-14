@@ -190,8 +190,26 @@
     </div>
   </div>
 
-  <footer class="hint">Abre este sitio en varias pestañas del mismo navegador para simular varios jugadores. La sesión no persiste al cerrar la pestaña.</footer>
+  <footer class="hint">Comparte el enlace de este sitio con tus amigos — cada quien puede entrar desde su propio dispositivo. La sesión no persiste al cerrar la pestaña.</footer>
 </div>
+
+<!-- Firebase Realtime Database: reemplaza el localStorage de antes para que
+     la sala se sincronice entre dispositivos distintos, no solo entre
+     pestañas del mismo navegador. Debe cargarse ANTES que script.js. -->
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-database-compat.js"></script>
+<script>
+  const firebaseConfig = {
+    apiKey: "AIzaSyBKe1FRqAwjfa8hrPBbIBcm0bDIfxYH8q0",
+    authDomain: "base-de-datos-momazos.firebaseapp.com",
+    databaseURL: "https://base-de-datos-momazos-default-rtdb.firebaseio.com",
+    projectId: "base-de-datos-momazos",
+    storageBucket: "base-de-datos-momazos.firebasestorage.app",
+    messagingSenderId: "112648228776",
+    appId: "1:112648228776:web:f5c9e7635a14712d62179d"
+  };
+  firebase.initializeApp(firebaseConfig);
+</script>
 
 <!-- Librerías externas para poder "quemar" el texto sobre GIFs animados al
      descargarlos (decodificar frames + re-codificar el GIF resultante).
