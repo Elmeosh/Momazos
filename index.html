@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Momazos</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <div class="top-bar">
+    <div class="logo">Moma<span>zos</span></div>
+    <div id="headerUser" class="row hidden">
+      <div class="avatar" id="headerAvatar"></div>
+      <span id="headerName" style="font-weight:600;"></span>
+      <button class="ghost small hidden" id="btnEndGame">Terminar partida</button>
+      <button class="ghost small" id="btnLeaveRoom">Salir de la sala</button>
+    </div>
+  </div>
+
+  <!-- LOGIN -->
+  <div id="screen-login" class="panel">
+    <h2>Elige tu nombre y sube tu foto de perfil</h2>
+    <label>Nombre de usuario</label>
+    <input type="text" id="loginName" maxlength="18" placeholder="Ej: PabloMemero">
+    <div class="avatar-picker">
+      <div class="avatar big" id="avatarPreview">📷</div>
+      <div>
+        <label style="margin-top:0;">Foto de perfil (opcional)</label>
+        <input type="file" id="avatarUpload" accept="image/*">
+      </div>
+    </div>
+    <div id="loginError" class="banner hidden"></div>
+    <button id="btnJoin">Entrar a la sala</button>
+  </div>
+
+  <!-- LOBBY -->
+  <div id="screen-lobby" class="panel hidden">
+    <div class="row" style="justify-content:space-between;">
+      <h2>Sala de espera</h2>
+      <div class="row">
+        <button class="ghost small" id="btnSettings">Configuración</button>
+        <button class="ghost small" id="btnResetRoom">Reiniciar sala</button>
+      </div>
+    </div>
+    <p class="muted" id="lobbyInfo"></p>
+    <div id="userList"></div>
+    <div style="margin-top:16px;" class="center">
+      <button id="btnStartGame">Iniciar partida</button>
+      <p class="muted" id="startHint" style="margin-top:8px;"></p>
+    </div>
+  </div>
+
+  <!-- SETTINGS / TEMPLATE EDITOR -->
+  <div id="screen-settings" class="panel hidden">
+    <div class="row" style="justify-content:space-between;">
+      <h2>Configuración</h2>
+      <button class="ghost small" id="btnBackToLobby">&larr; Volver</button>
+    </div>
+
+    <div class="split">
+      <div class="col">
+        <h3>Opciones de partida</h3>
+        <label>Cantidad de rondas</label>
+        <input type="number" id="cfgRounds" min="1" max="20" value="5">
+        <label>Segundos por ronda</label>
+        <input type="number" id="cfgSeconds" min="15" max="300" value="60">
+        <label>Segundos para votar cada meme</label>
+        <input type="number" id="cfgVoteSeconds" min="5" max="120" value="30">
+        <button class="small" id="btnSaveSettings" style="margin-top:12px;">Guardar opciones</button>
+      </div>
+
+      <div class="col">
+        <h3>Plantillas (<span id="tplCount">0</span>)</h3>
+        <div id="templateThumbs"></div>
+      </div>
+    </div>
+
+    <hr style="border:none;border-top:1px solid var(--line); margin:20px 0;">
+
+    <h3>Agregar plantilla nueva</h3>
+    <p class="muted">Sube una o varias imágenes (o GIFs) y dibuja (clic + arrastrar) los recuadros donde irá el texto. Si eliges varias, se muestran de a una para configurarlas; puedes ir y volver entre ellas antes de guardar.</p>
+    <label>Imagen o GIF (puedes seleccionar varias a la vez)</label>
+    <input type="file" id="newTplImage" accept="image/*,.gif" multiple>
+    <span class="muted hidden" id="tplQueueLabel" style="display:block;margin-top:6px;font-weight:600;"></span>
+    <div id="editorArea" class="hidden" style="margin-top:12px;">
+      <label>Nombre de la plantilla</label>
+      <input type="text" id="newTplName" placeholder="Ej: Reacción sorprendida">
+      <div class="editor-canvas" id="editorCanvas" style="margin-top:10px;">
+        <img id="editorImg" src="">
+      </div>
+      <div class="row" style="margin-top:10px;">
+        <button class="ghost small" id="btnUndoBox">Borrar último recuadro</button>
+        <span class="muted" id="boxCountLabel">0 recuadros</span>
+      </div>
+
+      <div class="row" style="margin-top:14px;justify-content:space-between;">
+        <button class="ghost small" id="btnTplPrev">&larr; Anterior</button>
+        <button class="ghost small" id="btnTplNext">Siguiente &rarr;</button>
+      </div>
+
+      <hr style="border:none;border-top:1px solid var(--line); margin:16px 0;">
+      <p class="muted" id="tplSaveHint" style="margin:0 0 10px;"></p>
+      <div class="row">
+        <button id="btnTplSaveAll">💾 Guardar plantilla(s)</button>
+        <button class="ghost" id="btnTplCancel">✖ Cancelar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- CAPTION / GAME ROUND -->
+  <div id="screen-caption" class="panel hidden">
+    <div class="row" style="justify-content:space-between;">
+      <h2 id="captionRoundLabel">Ronda 1</h2>
+      <div class="timer" id="captionTimer">--</div>
+    </div>
+    <p class="muted" id="captionSubmittedInfo"></p>
+    <div class="split">
+      <div class="col">
+        <div class="template-stage" id="captionStage"></div>
+        <div class="center" style="margin-top:10px;">
+          <button class="ghost small" id="btnRerollTemplate">🔀 Cambiar plantilla</button>
+          <span class="muted" id="rerollInfo" style="display:block;margin-top:4px;font-size:12px;"></span>
+        </div>
+      </div>
+      <div class="col">
+        <h3>Escribe tu meme</h3>
+        <div id="captionFields" class="field-list"></div>
+        <button id="btnSubmitMeme">Enviar meme</button>
+        <p id="captionDoneMsg" class="banner hidden">¡Meme enviado! Esperando a los demás...</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- REVEAL / VOTING -->
+  <div id="screen-reveal" class="panel hidden">
+    <div class="row" style="justify-content:space-between;">
+      <h2>¡A votar!</h2>
+      <div class="timer" id="revealTimer">--</div>
+    </div>
+    <p class="muted" id="revealProgress"></p>
+    <div class="template-stage" id="revealStage" style="max-width:520px;"></div>
+    <div class="vote-row-outer" id="voteRowOuter">
+      <button class="ghost buddy-btn" id="btnMemeBuddy">🤝 Meme Buddy</button>
+      <div class="vote-row" id="voteRow">
+        <button class="vote-btn down" id="btnVoteDown">💤 ZZZ</button>
+        <button class="vote-btn neutral" id="btnVoteNeutral">😐 meh</button>
+        <button class="vote-btn up" id="btnVoteUp">🔥 Momazo</button>
+      </div>
+    </div>
+    <p class="center muted" id="voteHint" style="margin-top:10px;"></p>
+    <div class="center" style="margin-top:16px;">
+      <button class="ghost" id="btnNextReveal">Siguiente &rarr;</button>
+    </div>
+  </div>
+
+  <!-- ROUND END -->
+  <div id="screen-roundend" class="panel hidden">
+    <h2>Fin de ronda</h2>
+    <div class="split roundend-split">
+      <div class="col">
+        <h3>Memes de la ronda</h3>
+        <div id="roundMemeList" class="meme-result-list"></div>
+      </div>
+      <div class="col side-block">
+        <h3>Puntajes de la ronda</h3>
+        <div id="roundScoreboard"></div>
+        <h3 style="margin-top:20px;">¿Por qué sumó o restó cada quien?</h3>
+        <div id="roundPointLog"></div>
+      </div>
+    </div>
+
+    <div class="center" style="margin-top:20px;">
+      <div class="timer" id="roundEndTimer">30s</div>
+      <p class="muted" id="roundEndReadyInfo" style="margin:8px 0;"></p>
+      <button class="ready-btn" id="btnRoundEndReady">✅ Estoy listo</button>
+    </div>
+  </div>
+
+  <!-- GAME END -->
+  <div id="screen-gameend" class="panel hidden">
+    <h2>🏆 Resultados finales</h2>
+    <div id="finalScoreboard"></div>
+    <div class="center" style="margin-top:16px;">
+      <button id="btnBackToLobbyFinal">Volver a la sala</button>
+    </div>
+  </div>
+
+  <footer class="hint">Abre este sitio en varias pestañas del mismo navegador para simular varios jugadores. La sesión no persiste al cerrar la pestaña.</footer>
+</div>
+
+<!-- Librerías externas para poder "quemar" el texto sobre GIFs animados al
+     descargarlos (decodificar frames + re-codificar el GIF resultante).
+     Si el usuario está sin conexión, script.js detecta que no cargaron y
+     recurre a descargar el GIF original sin texto, avisando por qué. -->
+<script src="https://cdn.jsdelivr.net/npm/gifuct-js@2.1.2/dist/gifuct-js.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/gif.js.optimized@1.0.1/dist/gif.js"></script>
+<script src="script.js"></script>
+</body>
+</html>
