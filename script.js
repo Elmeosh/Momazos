@@ -805,15 +805,25 @@ document.getElementById('btnSubmitMeme').onclick = ()=>{
 
 function checkAutoAdvanceCaption(){
   if(!room || room.status !== 'caption') return;
+  // Solo el anfitrión dispara el avance automático. Antes cualquier jugador
+  // conectado podía hacerlo, pero eso significaba que con 2+ jugadores
+  // conectados, AMBOS clientes detectaban la condición casi al mismo tiempo
+  // y ambos escribían su propia versión del estado a Firebase por separado
+  // (cada quien con su propio sorteo de plantillas, su propio revealOrder,
+  // etc.). Como Firebase aquí sobrescribe el documento completo en cada
+  // guardado (no hace merge), el que "ganaba la carrera" pisoteaba al otro
+  // — eso era la causa de plantillas repetidas/en blanco, votos que
+  // desaparecían y temporizadores que se reiniciaban antes de tiempo.
+  // Si el anfitrión se desconecta, `ensureValidHost()` reasigna el rol a
+  // otro jugador conectado automáticamente, así que esto no deja la sala
+  // trabada.
+  if(!isHost()) return;
   const totalUsers = Object.keys(room.users).length;
   const submittedCount = Object.keys(room.submissions).length;
   const timeUp = room.roundEndsAt && Date.now() >= room.roundEndsAt;
   const allSubmitted = totalUsers > 0 && submittedCount >= totalUsers;
   if(!allSubmitted && !timeUp) return;
 
-  // Cualquier jugador conectado puede disparar el avance de ronda (no solo
-  // el anfitrión): así no se traba si el usuario marcado como anfitrión
-  // quedó como "fantasma" de una sesión anterior.
   room = loadRoom();
   if(room.status !== 'caption') return; // ya avanzó (otra pestaña llegó primero)
   const order = Object.keys(room.submissions);
@@ -942,6 +952,7 @@ document.getElementById('btnNextReveal').onclick = ()=>{
 // tiempo restante a solo 5s en vez de esperar el conteo completo).
 function checkAutoAdvanceReveal(){
   if(!room || room.status !== 'reveal') return;
+  if(!isHost()) return; // ver nota en checkAutoAdvanceCaption sobre la carrera entre clientes
   const authorId = currentRevealUserId();
   if(!authorId) return;
 
@@ -999,9 +1010,11 @@ function finalizeRoundScoring(r){
     });
     const authorPoints = (ups - downs) * 200;
     const authorName = (r.users[authorId]||{}).name || '??? (ya no está en la sala)';
-    if(authorPoints !== 0){
-      addDelta(authorId, authorPoints, `Reacciones a tu meme "${tpl?tpl.name:'?'}": ${ups} Momazo, ${downs} ZZZ`);
-    }
+    // Se registran por separado los Momazos y los ZZZ (en vez de un solo
+    // monto neto) para poder mostrar un resumen corto tipo "+400 por
+    // Momazos, -200 por ZZZ" en la pantalla de fin de ronda.
+    if(ups > 0) addDelta(authorId, ups*200, 'Momazos');
+    if(downs > 0) addDelta(authorId, -downs*200, 'ZZZ');
 
     // Bonificación de los Meme Buddies de este meme.
     voterIds.forEach(buddyId=>{
@@ -1015,7 +1028,7 @@ function finalizeRoundScoring(r){
       });
       const buddyPoints = (otherUps - otherDowns) * 50;
       if(buddyPoints !== 0){
-        addDelta(buddyId, buddyPoints, `Meme Buddy en el meme de ${authorName}: ${otherUps} Momazo, ${otherDowns} ZZZ de otros jugadores`);
+        addDelta(buddyId, buddyPoints, 'Meme Buddy');
       }
     });
 
@@ -1064,8 +1077,26 @@ function renderRoundEnd(){
       const row = document.createElement('div');
       row.className = 'log-player';
       const color = d.total >= 0 ? 'var(--accent3)' : 'var(--down)';
-      row.innerHTML = `<div class="log-player-head"><strong>${escapeHtml(u.name)}</strong><span style="color:${color};font-weight:800;">${d.total>0?'+':''}${d.total} pts</span></div>` +
-        `<ul class="log-reasons">${d.entries.map(e=>`<li>${e.amount>0?'+':''}${e.amount} — ${escapeHtml(e.reason)}</li>`).join('')}</ul>`;
+      // Agrupa las entradas por categoría (Momazos / ZZZ / Meme Buddy) y
+      // suma los montos de cada una, para mostrar un resumen corto en vez
+      // de una explicación larga y explícita de cada reacción.
+      const grouped = {};
+      d.entries.forEach(e=>{ grouped[e.reason] = (grouped[e.reason]||0) + e.amount; });
+      const summary = Object.entries(grouped)
+        .map(([label, amt])=> `${amt>0?'+':''}${amt} por ${label}`)
+        .join(', ');
+      row.innerHTML = `<div class="log-player-head">` +
+        `<strong>${escapeHtml(u.name)}</strong>` +
+        `<span style="color:${color};font-weight:800;">${d.total>0?'+':''}${d.total} pts</span>` +
+        `<button class="log-toggle" type="button" aria-label="Ver detalle">▾</button>` +
+        `</div>` +
+        `<div class="log-summary hidden">${escapeHtml(summary)}</div>`;
+      const toggleBtn = row.querySelector('.log-toggle');
+      const summaryEl = row.querySelector('.log-summary');
+      toggleBtn.onclick = ()=>{
+        summaryEl.classList.toggle('hidden');
+        toggleBtn.classList.toggle('open');
+      };
       logBox.appendChild(row);
     });
   }
@@ -1288,6 +1319,7 @@ document.getElementById('btnRoundEndReady').onclick = ()=>{
 // marcaron como "listos" (así se puede saltar la espera para jugar rápido).
 function checkAutoAdvanceRoundEnd(){
   if(!room || room.status !== 'roundend') return;
+  if(!isHost()) return; // ver nota en checkAutoAdvanceCaption sobre la carrera entre clientes
   const totalUsers = Object.keys(room.users).length;
   const readyMap = room.roundEndReady || {};
   const readyCount = Object.keys(readyMap).filter(uid => readyMap[uid] && room.users[uid]).length;
