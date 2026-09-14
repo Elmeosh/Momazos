@@ -124,12 +124,33 @@ let drawingBox = null;
 const dbRoomRef = firebase.database().ref(ROOM_KEY);
 const dbTplRef = firebase.database().ref(TPL_KEY);
 
+// OJO con esto: Firebase Realtime Database NO guarda objetos {} ni arrays
+// [] vacíos — al escribirlos, simplemente borra esa clave. Eso significa
+// que campos como `users`, `votes`, `usedTemplateIds`, etc. pueden llegar
+// como `undefined` después de un viaje de ida y vuelta por Firebase (por
+// ejemplo, apenas se reinicia la sala y queda con 0 usuarios). Como el
+// resto del juego asume que esos campos SIEMPRE son al menos {} o [],
+// normalizamos cualquier dato que venga de Firebase antes de usarlo.
+function normalizeRoom(val){
+  const base = JSON.parse(JSON.stringify(DEFAULT_ROOM));
+  if(!val) return base;
+  const merged = Object.assign(base, val);
+  merged.users = val.users || {};
+  merged.submissions = val.submissions || {};
+  merged.votes = val.votes || {};
+  merged.scores = val.scores || {};
+  merged.revealOrder = val.revealOrder || [];
+  merged.usedTemplateIds = val.usedTemplateIds || [];
+  merged.roundEndReady = val.roundEndReady || {};
+  return merged;
+}
+
 function loadRoom(){
-  return room ? JSON.parse(JSON.stringify(room)) : JSON.parse(JSON.stringify(DEFAULT_ROOM));
+  return normalizeRoom(room);
 }
 function saveRoom(r){
-  room = r;
-  dbRoomRef.set(r).catch(e=>console.error('No se pudo guardar la sala en Firebase', e));
+  room = normalizeRoom(r);
+  dbRoomRef.set(room).catch(e=>console.error('No se pudo guardar la sala en Firebase', e));
 }
 function loadTemplates(){
   return (templates && templates.length) ? templates : builtinTemplates();
@@ -1362,7 +1383,7 @@ function checkFirebaseReadyForJoin(){
 
 dbRoomRef.on('value', snapshot=>{
   const val = snapshot.val();
-  room = val || JSON.parse(JSON.stringify(DEFAULT_ROOM));
+  room = normalizeRoom(val);
   if(ensureValidHost(room)) saveRoom(room);
   firebaseSynced.room = true;
   checkFirebaseReadyForJoin();
