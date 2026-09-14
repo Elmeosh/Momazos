@@ -220,7 +220,11 @@ input[type=file]::file-selector-button:hover{ transform: translate(-1px,-1px); }
   user-select:none;
   box-shadow: 5px 5px 0 var(--accent3);
 }
-.editor-canvas img{ display:block; width:100%; }
+.editor-canvas img{
+  display:block; width:100%;
+  -webkit-user-drag: none;
+  user-drag: none;
+}
 .editor-box{
   position:absolute; border:2px solid var(--accent); background: rgba(255,63,125,.22);
 }
