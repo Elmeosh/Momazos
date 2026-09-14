@@ -268,6 +268,14 @@ document.getElementById('btnJoin').onclick = ()=>{
   saveRoom(room);
   myName = name;
   joined = true;
+  // Limpieza automática real: si esta pestaña pierde la conexión con
+  // Firebase (se cierra, se queda sin señal, se cierra el navegador, etc.),
+  // el propio servidor de Firebase borra a este jugador de la sala — ya no
+  // depende de que el navegador alcance a avisar (a diferencia del evento
+  // "beforeunload" de antes, que no siempre se disparaba a tiempo). Esto
+  // evita que se acumulen más jugadores fantasma y que el rol de anfitrión
+  // se quede atascado en alguien que ya no está.
+  dbRoomRef.child('users').child(myId).onDisconnect().remove();
   document.getElementById('headerUser').classList.remove('hidden');
   document.getElementById('headerName').textContent = myName;
   renderHeaderAvatar();
