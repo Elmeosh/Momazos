@@ -29,8 +29,9 @@ const DEFAULT_ROOM = {
   totalRounds: 5,
   roundSeconds: 60,
   votingSeconds: 30,
-  templateId: null,
-  rerollsLeft: 5,
+  playerTemplates: {},     // { userId: templateId } — cada jugador ve su propia plantilla
+  playerRerollsLeft: {},   // { userId: number }
+  templateUseCounts: {},   // { userId: { templateId: veces que le salió } } — para bajar la probabilidad de repetir
   roundEndsAt: null,
   submissions: {},     // { userId: { templateId, texts:[...] } }
   revealOrder: [],      // [userId,...]
@@ -40,7 +41,6 @@ const DEFAULT_ROOM = {
   votes: {},            // { authorId: { voterId: { rating: 1|0|-1|null, buddy: bool } } }
   scores: {},           // { userId: number }
   lastRoundBreakdown: null,
-  usedTemplateIds: [],
   roundEndEndsAt: null, // deadline de los 30s para descargar memes / marcarse "listo"
   roundEndReady: {}     // { userId: true } — quién ya confirmó que puede seguir
 };
@@ -126,7 +126,7 @@ const dbTplRef = firebase.database().ref(TPL_KEY);
 
 // OJO con esto: Firebase Realtime Database NO guarda objetos {} ni arrays
 // [] vacíos — al escribirlos, simplemente borra esa clave. Eso significa
-// que campos como `users`, `votes`, `usedTemplateIds`, etc. pueden llegar
+// que campos como `users`, `votes`, `playerTemplates`, etc. pueden llegar
 // como `undefined` después de un viaje de ida y vuelta por Firebase (por
 // ejemplo, apenas se reinicia la sala y queda con 0 usuarios). Como el
 // resto del juego asume que esos campos SIEMPRE son al menos {} o [],
@@ -140,7 +140,9 @@ function normalizeRoom(val){
   merged.votes = val.votes || {};
   merged.scores = val.scores || {};
   merged.revealOrder = val.revealOrder || [];
-  merged.usedTemplateIds = val.usedTemplateIds || [];
+  merged.playerTemplates = val.playerTemplates || {};
+  merged.playerRerollsLeft = val.playerRerollsLeft || {};
+  merged.templateUseCounts = val.templateUseCounts || {};
   merged.roundEndReady = val.roundEndReady || {};
   return merged;
 }
@@ -318,7 +320,8 @@ document.getElementById('btnEndGame').onclick = ()=>{
   room = loadRoom();
   room.status = 'lobby';
   room.round = 0;
-  room.templateId = null;
+  room.playerTemplates = {};
+  room.playerRerollsLeft = {};
   room.roundEndsAt = null;
   room.submissions = {};
   room.revealOrder = [];
@@ -327,7 +330,6 @@ document.getElementById('btnEndGame').onclick = ()=>{
   room.voteEndsAt = null;
   room.voteAllInTriggered = false;
   room.lastRoundBreakdown = null;
-  room.usedTemplateIds = [];
   room.roundEndEndsAt = null;
   room.roundEndReady = {};
   saveRoom(room);
@@ -386,17 +388,39 @@ document.getElementById('btnStartGame').onclick = ()=>{
   startRound(room, true);
 };
 
+// Elige una plantilla al azar para UN jugador puntual. Todas las plantillas
+// pueden salir siempre (no se descarta ninguna), pero las que ya le salieron
+// antes a ESE jugador pesan menos en el sorteo, así es menos probable (no
+// imposible) que se repitan para él.
+function pickTemplateForPlayer(usedCounts){
+  const weighted = templates.map(t => ({
+    t,
+    weight: 1 / (1 + (usedCounts[t.id] || 0))
+  }));
+  const total = weighted.reduce((sum, w) => sum + w.weight, 0);
+  let roll = Math.random() * total;
+  for(const w of weighted){
+    if(roll < w.weight) return w.t;
+    roll -= w.weight;
+  }
+  return weighted[weighted.length - 1].t;
+}
+
 function startRound(r, isFirst){
-  const available = templates.filter(t => !r.usedTemplateIds.includes(t.id));
-  const pool = available.length ? available : templates;
-  const chosen = pool[Math.floor(Math.random()*pool.length)];
-  r.usedTemplateIds = isFirst ? [chosen.id] : [...r.usedTemplateIds, chosen.id];
-  if(r.usedTemplateIds.length >= templates.length) r.usedTemplateIds = [chosen.id];
   r.round = isFirst ? 1 : r.round + 1;
   r.status = 'caption';
-  r.templateId = chosen.id;
-  r.rerollsLeft = 5;
   r.roundEndsAt = Date.now() + r.roundSeconds*1000;
+  // Cada jugador recibe su propia plantilla, sorteada de forma independiente
+  // de la de los demás (antes era una sola para toda la sala).
+  r.playerTemplates = {};
+  r.playerRerollsLeft = {};
+  Object.keys(r.users).forEach(uid=>{
+    const usedCounts = r.templateUseCounts[uid] || {};
+    const chosen = pickTemplateForPlayer(usedCounts);
+    r.playerTemplates[uid] = chosen.id;
+    r.playerRerollsLeft[uid] = 5;
+    r.templateUseCounts[uid] = { ...usedCounts, [chosen.id]: (usedCounts[chosen.id] || 0) + 1 };
+  });
   r.submissions = {};
   r.revealOrder = [];
   r.revealIndex = 0;
@@ -619,16 +643,20 @@ document.getElementById('btnUndoBox').onclick = ()=>{
 document.getElementById('btnRerollTemplate').onclick = ()=>{
   room = loadRoom();
   if(room.status !== 'caption') return;
-  if((room.rerollsLeft || 0) <= 0) return;
-  const others = templates.filter(t => t.id !== room.templateId);
+  if(room.submissions[myId]) return; // ya enviaste tu meme, no se puede recambiar
+  const rerollsLeft = room.playerRerollsLeft[myId] !== undefined ? room.playerRerollsLeft[myId] : 5;
+  if(rerollsLeft <= 0) return;
+  const currentId = room.playerTemplates[myId];
+  const others = templates.filter(t => t.id !== currentId);
   if(others.length === 0) return;
+  // El reroll siempre te da una plantilla DISTINTA a la actual (para que se
+  // note el cambio), elegida al azar entre el resto — esto no afecta a los
+  // demás jugadores ni a los memes que ya hayan enviado.
   const next = others[Math.floor(Math.random()*others.length)];
-  room.templateId = next.id;
-  room.rerollsLeft -= 1;
-  // Al cambiar de plantilla los recuadros pueden ser distintos, así que se
-  // reinician los memes ya enviados en esta ronda (para todos los jugadores).
-  room.submissions = {};
-  room.votes = {};
+  const usedCounts = room.templateUseCounts[myId] || {};
+  room.playerTemplates[myId] = next.id;
+  room.playerRerollsLeft[myId] = rerollsLeft - 1;
+  room.templateUseCounts[myId] = { ...usedCounts, [next.id]: (usedCounts[next.id] || 0) + 1 };
   saveRoom(room);
 };
 
@@ -712,7 +740,7 @@ function updateStageBoxText(idx, value){
 let captionFieldsBuiltForKey = null;
 
 function renderCaptionScreen(){
-  const tpl = tplById(room.templateId);
+  const tpl = tplById(room.playerTemplates[myId]);
   if(!tpl) return;
   document.getElementById('captionRoundLabel').textContent = `Ronda ${room.round} de ${room.totalRounds} — ${tpl.name}`;
 
@@ -761,13 +789,13 @@ function renderCaptionScreen(){
   const totalUsers = Object.keys(room.users).length;
   document.getElementById('captionSubmittedInfo').textContent = `${submittedCount} de ${totalUsers} jugadores enviaron su meme.`;
 
-  const rerollsLeft = room.rerollsLeft !== undefined ? room.rerollsLeft : 5;
+  const rerollsLeft = room.playerRerollsLeft[myId] !== undefined ? room.playerRerollsLeft[myId] : 5;
   document.getElementById('rerollInfo').textContent = `Cambios de plantilla restantes: ${rerollsLeft}`;
   document.getElementById('btnRerollTemplate').disabled = !!already || rerollsLeft <= 0 || templates.length <= 1;
 }
 
 document.getElementById('btnSubmitMeme').onclick = ()=>{
-  const tpl = tplById(room.templateId);
+  const tpl = tplById(room.playerTemplates[myId]);
   const areas = document.querySelectorAll('#captionFields textarea');
   const texts = Array.from(areas).map(a=>a.value.trim());
   room = loadRoom();
