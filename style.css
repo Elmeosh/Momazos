@@ -23,6 +23,7 @@
   --shadow-sm: 3px 3px 0 rgba(34,23,51,0.9);
 }
 *{box-sizing:border-box;}
+html, body{ overflow-x:hidden; } /* red de seguridad contra desbordes horizontales en celular */
 body{
   margin:0;
   font-family: "Nunito", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -323,4 +324,39 @@ button.ready-btn.active{
   outline-offset: 2px;
   transform: translate(2px,2px);
   box-shadow: 1px 1px 0 rgba(34,23,51,0.92);
+}
+
+/* =========================================================
+   PANTALLAS ANGOSTAS (celular) — solo ajustamos lo que se usa
+   para JUGAR (sala, escribir meme, votar, resultados). El
+   editor de plantillas queda igual: se sigue usando desde PC.
+   ========================================================= */
+@media (max-width: 600px){
+  .wrap{ padding: 16px 12px 40px; }
+  .panel{ padding: 16px; border-radius: 16px; }
+  h1{ font-size: 24px; }
+  h2{ font-size: 19px; }
+  h3{ font-size: 16px; }
+  .top-bar{ margin-bottom: 18px; gap:8px; }
+  .logo{ font-size: 22px; }
+
+  button{ padding: 10px 16px; font-size: 14px; }
+  button.small{ padding: 6px 10px; font-size: 12.5px; }
+
+  /* Que las dos columnas (plantilla + campos de texto, memes + puntajes)
+     se apilen de una sola vez en vez de quedar apretadas a medias. */
+  .split > .col{ min-width: 100%; }
+
+  /* Botones de votación: que se acomoden en más de una fila en vez de
+     desbordar o quedar demasiado apretados. */
+  .vote-row-outer{ gap: 12px; }
+  .vote-row{ flex-wrap: wrap; gap: 12px; }
+  .vote-btn{ padding: 12px 16px; font-size: 14px; }
+  .buddy-btn{ padding: 10px 14px; font-size: 13px; }
+
+  .avatar.big{ width: 84px; height: 84px; font-size: 38px; }
+  .timer{ font-size: 18px; padding: 5px 12px; }
+
+  .meme-result-card{ flex: 1 1 100%; max-width: 100%; }
+  .side-block{ flex: 1 1 100%; }
 }

@@ -75,7 +75,10 @@
       </div>
 
       <div class="col">
-        <h3>Plantillas (<span id="tplCount">0</span>)</h3>
+        <h3 class="row" style="justify-content:space-between;align-items:center;">
+          <span>Plantillas (<span id="tplCount">0</span>)</span>
+          <button class="log-toggle" id="btnToggleTemplates" title="Ver todas las plantillas">▾</button>
+        </h3>
         <div id="templateThumbs"></div>
       </div>
     </div>
@@ -91,7 +94,7 @@
       <label>Nombre de la plantilla</label>
       <input type="text" id="newTplName" placeholder="Ej: Reacción sorprendida">
       <div class="editor-canvas" id="editorCanvas" style="margin-top:10px;">
-        <img id="editorImg" src="" draggable="false">
+        <img id="editorImg" src="">
       </div>
       <div class="row" style="margin-top:10px;">
         <button class="ghost small" id="btnUndoBox">Borrar último recuadro</button>

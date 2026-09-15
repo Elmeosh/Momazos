@@ -449,16 +449,34 @@ document.getElementById('btnSaveSettings').onclick = ()=>{
   alert('Opciones guardadas.');
 };
 
+let templatesExpanded = false;
+
 function renderTemplateThumbs(){
   document.getElementById('tplCount').textContent = templates.length;
   const box = document.getElementById('templateThumbs');
+  const toggleBtn = document.getElementById('btnToggleTemplates');
   box.innerHTML = '';
-  templates.forEach(t=>{
+
+  // Solo mostramos la primera plantilla por defecto para que la lista no
+  // crezca sin control; la flechita despliega el resto.
+  toggleBtn.classList.toggle('hidden', templates.length <= 1);
+  toggleBtn.classList.toggle('open', templatesExpanded);
+  const visible = templatesExpanded ? templates : templates.slice(0, 1);
+
+  visible.forEach(t=>{
     const div = document.createElement('div');
     div.className = 'template-thumb';
     div.innerHTML = `<img src="${t.image}"><div class="tpl-info"><div style="font-weight:600;">${escapeHtml(t.name)}</div><div class="muted" style="font-size:12px;">${t.boxes.length} recuadro(s)</div></div><button class="small danger" data-tplid="${t.id}">🗑️ Eliminar</button>`;
     box.appendChild(div);
   });
+  if(!templatesExpanded && templates.length > 1){
+    const more = document.createElement('p');
+    more.className = 'muted';
+    more.style.margin = '4px 0 0';
+    more.style.fontSize = '13px';
+    more.textContent = `+ ${templates.length - 1} plantilla(s) más — usa la flecha para verlas.`;
+    box.appendChild(more);
+  }
   box.querySelectorAll('button[data-tplid]').forEach(btn=>{
     btn.onclick = ()=>{
       const t = templates.find(x=>x.id === btn.dataset.tplid);
@@ -470,6 +488,10 @@ function renderTemplateThumbs(){
     };
   });
 }
+document.getElementById('btnToggleTemplates').onclick = ()=>{
+  templatesExpanded = !templatesExpanded;
+  renderTemplateThumbs();
+};
 
 // ---------- Selección múltiple de imágenes para nuevas plantillas ----------
 // Al elegir varios archivos, se configuran de a uno: se dibuja el/los
