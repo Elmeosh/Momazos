@@ -691,18 +691,16 @@ document.getElementById('btnRerollTemplate').onclick = ()=>{
   const currentId = room.playerTemplates[myId];
   const others = templates.filter(t => t.id !== currentId);
   if(others.length === 0) return;
-  delayThenRun(document.getElementById('btnRerollTemplate'), 1000, ()=>{
-    room = loadRoom();
-    // El reroll siempre te da una plantilla DISTINTA a la actual (para que se
-    // note el cambio), elegida al azar entre el resto — esto no afecta a los
-    // demás jugadores ni a los memes que ya hayan enviado.
-    const next = others[Math.floor(Math.random()*others.length)];
-    const usedCounts = room.templateUseCounts[myId] || {};
-    room.playerTemplates[myId] = next.id;
-    room.playerRerollsLeft[myId] = rerollsLeft - 1;
-    room.templateUseCounts[myId] = { ...usedCounts, [next.id]: (usedCounts[next.id] || 0) + 1 };
-    saveRoom(room);
-  });
+  // Sin espera artificial: el cambio de plantilla ocurre al instante.
+  // El reroll siempre te da una plantilla DISTINTA a la actual (para que se
+  // note el cambio), elegida al azar entre el resto — esto no afecta a los
+  // demás jugadores ni a los memes que ya hayan enviado.
+  const next = others[Math.floor(Math.random()*others.length)];
+  const usedCounts = room.templateUseCounts[myId] || {};
+  room.playerTemplates[myId] = next.id;
+  room.playerRerollsLeft[myId] = rerollsLeft - 1;
+  room.templateUseCounts[myId] = { ...usedCounts, [next.id]: (usedCounts[next.id] || 0) + 1 };
+  saveRoom(room);
 };
 
 // ---------- Caption screen ----------
@@ -787,7 +785,7 @@ let captionFieldsBuiltForKey = null;
 function renderCaptionScreen(){
   const tpl = tplById(room.playerTemplates[myId]);
   if(!tpl) return;
-  document.getElementById('captionRoundLabel').textContent = `Ronda ${room.round} de ${room.totalRounds} — ${tpl.name}`;
+  document.getElementById('captionRoundLabel').textContent = `Ronda ${room.round} de ${room.totalRounds}`;
 
   const fieldsBox = document.getElementById('captionFields');
   const already = room.submissions[myId];
@@ -849,6 +847,30 @@ document.getElementById('btnSubmitMeme').onclick = ()=>{
     saveRoom(room);
   });
 };
+
+// Si a un jugador se le acaba el tiempo de la ronda sin haber presionado
+// "Enviar meme", igual se toma en cuenta su meme siempre que haya escrito
+// algo (aunque sea una sola letra o número) en al menos uno de los cuadros
+// de texto. Cada jugador evalúa esto sobre su PROPIO estado (lo que tiene
+// escrito en su pantalla), así que no depende del anfitrión ni de que
+// otra pestaña conozca ese texto.
+function checkAutoSubmitOnTimeout(){
+  if(!room || room.status !== 'caption') return;
+  if(room.submissions[myId]) return; // ya se envió (a mano o automáticamente)
+  const timeUp = room.roundEndsAt && Date.now() >= room.roundEndsAt;
+  if(!timeUp) return;
+  const tpl = tplById(room.playerTemplates[myId]);
+  if(!tpl) return;
+  const areas = document.querySelectorAll('#captionFields textarea');
+  if(!areas.length) return;
+  const texts = Array.from(areas).map(a=>a.value.trim());
+  const hasAnyContent = texts.some(t=>t.length>0);
+  if(!hasAnyContent) return; // completamente vacío: no se envía nada
+  room = loadRoom();
+  if(room.status !== 'caption' || room.submissions[myId]) return; // ya avanzó u otra pestaña ya lo envió
+  room.submissions[myId] = { templateId: tpl.id, texts };
+  saveRoom(room);
+}
 
 function checkAutoAdvanceCaption(){
   if(!room || room.status !== 'caption') return;
@@ -1062,7 +1084,7 @@ function finalizeRoundScoring(r){
     // Se registran por separado los Momazos y los ZZZ (en vez de un solo
     // monto neto) para poder mostrar un resumen corto tipo "+400 por
     // Momazos, -200 por ZZZ" en la pantalla de fin de ronda.
-    if(ups > 0) addDelta(authorId, ups*200, 'Momazos');
+    if(ups > 0) addDelta(authorId, ups*200, 'Momazo');
     if(downs > 0) addDelta(authorId, -downs*200, 'ZZZ');
 
     // Bonificación de los Meme Buddies de este meme.
@@ -1089,6 +1111,12 @@ function finalizeRoundScoring(r){
 
   Object.entries(perPlayer).forEach(([uid, d])=>{
     r.scores[uid] = (r.scores[uid]||0) + d.total;
+  });
+  // Todos los jugadores conectados aparecen en el desglose de la ronda,
+  // aunque no hayan sumado ni restado nada (para que la flechita
+  // desplegable salga para cada jugador, no solo para los que puntuaron).
+  Object.keys(r.users).forEach(uid=>{
+    if(!perPlayer[uid]) perPlayer[uid] = { total: 0, entries: [] };
   });
   perMeme.sort((a,b)=> b.points - a.points);
   r.lastRoundBreakdown = { perMeme, perPlayer };
@@ -1143,9 +1171,9 @@ function renderRoundEnd(){
         // de una explicación larga y explícita de cada reacción.
         const grouped = {};
         d.entries.forEach(e=>{ grouped[e.reason] = (grouped[e.reason]||0) + e.amount; });
-        const summary = Object.entries(grouped)
-          .map(([label, amt])=> `${amt>0?'+':''}${amt} por ${label}`)
-          .join(', ');
+        const summary = Object.keys(grouped).length
+          ? Object.entries(grouped).map(([label, amt])=> `${label} ${amt>0?'+':''}${amt}`).join('   ')
+          : 'Sin cambios esta ronda';
         row.innerHTML = `<div class="log-player-head">` +
           `<strong>${escapeHtml(u.name)}</strong>` +
           `<span style="color:${color};font-weight:800;">${d.total>0?'+':''}${d.total} pts</span>` +
@@ -1479,7 +1507,7 @@ function render(){
     case 'lobby':
       showScreen('lobby'); renderLobby(); break;
     case 'caption':
-      showScreen('caption'); renderCaptionScreen(); checkAutoAdvanceCaption(); break;
+      showScreen('caption'); renderCaptionScreen(); checkAutoSubmitOnTimeout(); checkAutoAdvanceCaption(); break;
     case 'reveal':
       showScreen('reveal'); renderRevealScreen(); checkAutoAdvanceReveal(); break;
     case 'roundend':
