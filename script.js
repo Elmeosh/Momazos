@@ -201,6 +201,24 @@ function renderAvatarPreview(){
   const el = document.getElementById('avatarPreview');
   el.innerHTML = `<img src="${myAvatar || DEFAULT_AVATAR}">`;
 }
+// ---------- Retardo artificial en botones de acción ----------
+// A pedido: que iniciar partida, enviar meme, etc. no reaccionen
+// instantáneo, para que se sienta menos "brusco". Deshabilita el botón
+// durante `ms` y recién después ejecuta la acción real (las validaciones
+// previas, como "no eres anfitrión" o "falta una plantilla", siguen
+// avisando al instante, sin esperar). `busyButtons` evita que un render()
+// concurrente (corre cada 1s) reactive el botón a mitad de la espera.
+const busyButtons = new Set();
+function delayThenRun(btn, ms, action){
+  if(busyButtons.has(btn.id)) return;
+  busyButtons.add(btn.id);
+  btn.disabled = true;
+  setTimeout(()=>{
+    busyButtons.delete(btn.id);
+    action();
+  }, ms);
+}
+
 document.getElementById('avatarUpload').onchange = (e)=>{
   const file = e.target.files[0];
   if(!file) return;
@@ -385,7 +403,9 @@ document.getElementById('btnStartGame').onclick = ()=>{
     return;
   }
   if(Object.keys(room.users).length < 1) return;
-  startRound(room, true);
+  delayThenRun(document.getElementById('btnStartGame'), 3000, ()=>{
+    startRound(room, true);
+  });
 };
 
 // Elige una plantilla al azar para UN jugador puntual. Todas las plantillas
@@ -671,15 +691,18 @@ document.getElementById('btnRerollTemplate').onclick = ()=>{
   const currentId = room.playerTemplates[myId];
   const others = templates.filter(t => t.id !== currentId);
   if(others.length === 0) return;
-  // El reroll siempre te da una plantilla DISTINTA a la actual (para que se
-  // note el cambio), elegida al azar entre el resto — esto no afecta a los
-  // demás jugadores ni a los memes que ya hayan enviado.
-  const next = others[Math.floor(Math.random()*others.length)];
-  const usedCounts = room.templateUseCounts[myId] || {};
-  room.playerTemplates[myId] = next.id;
-  room.playerRerollsLeft[myId] = rerollsLeft - 1;
-  room.templateUseCounts[myId] = { ...usedCounts, [next.id]: (usedCounts[next.id] || 0) + 1 };
-  saveRoom(room);
+  delayThenRun(document.getElementById('btnRerollTemplate'), 1000, ()=>{
+    room = loadRoom();
+    // El reroll siempre te da una plantilla DISTINTA a la actual (para que se
+    // note el cambio), elegida al azar entre el resto — esto no afecta a los
+    // demás jugadores ni a los memes que ya hayan enviado.
+    const next = others[Math.floor(Math.random()*others.length)];
+    const usedCounts = room.templateUseCounts[myId] || {};
+    room.playerTemplates[myId] = next.id;
+    room.playerRerollsLeft[myId] = rerollsLeft - 1;
+    room.templateUseCounts[myId] = { ...usedCounts, [next.id]: (usedCounts[next.id] || 0) + 1 };
+    saveRoom(room);
+  });
 };
 
 // ---------- Caption screen ----------
@@ -798,7 +821,7 @@ function renderCaptionScreen(){
   }else{
     areas.forEach(a=> a.disabled = false);
     document.getElementById('captionDoneMsg').classList.add('hidden');
-    document.getElementById('btnSubmitMeme').disabled = false;
+    document.getElementById('btnSubmitMeme').disabled = busyButtons.has('btnSubmitMeme');
   }
 
   // El escenario refleja siempre el texto actual de los campos (ya sea lo
@@ -813,16 +836,18 @@ function renderCaptionScreen(){
 
   const rerollsLeft = room.playerRerollsLeft[myId] !== undefined ? room.playerRerollsLeft[myId] : 5;
   document.getElementById('rerollInfo').textContent = `Cambios de plantilla restantes: ${rerollsLeft}`;
-  document.getElementById('btnRerollTemplate').disabled = !!already || rerollsLeft <= 0 || templates.length <= 1;
+  document.getElementById('btnRerollTemplate').disabled = !!already || rerollsLeft <= 0 || templates.length <= 1 || busyButtons.has('btnRerollTemplate');
 }
 
 document.getElementById('btnSubmitMeme').onclick = ()=>{
   const tpl = tplById(room.playerTemplates[myId]);
   const areas = document.querySelectorAll('#captionFields textarea');
   const texts = Array.from(areas).map(a=>a.value.trim());
-  room = loadRoom();
-  room.submissions[myId] = { templateId: tpl.id, texts };
-  saveRoom(room);
+  delayThenRun(document.getElementById('btnSubmitMeme'), 1000, ()=>{
+    room = loadRoom();
+    room.submissions[myId] = { templateId: tpl.id, texts };
+    saveRoom(room);
+  });
 };
 
 function checkAutoAdvanceCaption(){
@@ -965,8 +990,10 @@ function advanceReveal(r){
 }
 
 document.getElementById('btnNextReveal').onclick = ()=>{
-  room = loadRoom();
-  advanceReveal(room);
+  delayThenRun(document.getElementById('btnNextReveal'), 1000, ()=>{
+    room = loadRoom();
+    advanceReveal(room);
+  });
 };
 
 // Avance automático de la votación: si se acaba el tiempo, o si todos los
@@ -1084,73 +1111,88 @@ function renderScoreboard(container){
 // Pantalla de cierre de ronda: puntaje total, detalle de por qué cada quien
 // ganó/perdió puntos esta ronda, y la lista de memes de la ronda con botón
 // de descarga.
-function renderRoundEnd(){
-  renderScoreboard(document.getElementById('roundScoreboard'));
+// Solo reconstruimos la lista de memes y el detalle de puntos UNA VEZ por
+// ronda (no en cada re-render, que ocurre cada 1s para poder detectar el
+// avance automático). Antes se reconstruía todo el tiempo, lo que borraba
+// el estado de las flechitas desplegadas y hacía saltar el scroll de la
+// página mientras alguien intentaba desplazarse para ver los memes.
+let roundEndBuiltForRound = null;
 
+function renderRoundEnd(){
   const breakdown = room.lastRoundBreakdown;
-  const logBox = document.getElementById('roundPointLog');
-  logBox.innerHTML = '';
-  const playerEntries = breakdown ? Object.entries(breakdown.perPlayer) : [];
-  if(playerEntries.length === 0){
-    logBox.innerHTML = '<p class="muted">Nadie sumó ni restó puntos esta ronda.</p>';
-  }else{
-    playerEntries.sort((a,b)=> b[1].total - a[1].total).forEach(([uid, d])=>{
-      const u = room.users[uid] || {name:'??? (salió de la sala)'};
-      const row = document.createElement('div');
-      row.className = 'log-player';
-      const color = d.total >= 0 ? 'var(--accent3)' : 'var(--down)';
-      // Agrupa las entradas por categoría (Momazos / ZZZ / Meme Buddy) y
-      // suma los montos de cada una, para mostrar un resumen corto en vez
-      // de una explicación larga y explícita de cada reacción.
-      const grouped = {};
-      d.entries.forEach(e=>{ grouped[e.reason] = (grouped[e.reason]||0) + e.amount; });
-      const summary = Object.entries(grouped)
-        .map(([label, amt])=> `${amt>0?'+':''}${amt} por ${label}`)
-        .join(', ');
-      row.innerHTML = `<div class="log-player-head">` +
-        `<strong>${escapeHtml(u.name)}</strong>` +
-        `<span style="color:${color};font-weight:800;">${d.total>0?'+':''}${d.total} pts</span>` +
-        `<button class="log-toggle" type="button" aria-label="Ver detalle">▾</button>` +
-        `</div>` +
-        `<div class="log-summary hidden">${escapeHtml(summary)}</div>`;
-      const toggleBtn = row.querySelector('.log-toggle');
-      const summaryEl = row.querySelector('.log-summary');
-      toggleBtn.onclick = ()=>{
-        summaryEl.classList.toggle('hidden');
-        toggleBtn.classList.toggle('open');
+  const buildKey = room.round + '_' + (breakdown ? 'ok' : 'none');
+
+  if(roundEndBuiltForRound !== buildKey){
+    roundEndBuiltForRound = buildKey;
+
+    renderScoreboard(document.getElementById('roundScoreboard'));
+
+    const logBox = document.getElementById('roundPointLog');
+    logBox.innerHTML = '';
+    const playerEntries = breakdown ? Object.entries(breakdown.perPlayer) : [];
+    if(playerEntries.length === 0){
+      logBox.innerHTML = '<p class="muted">Nadie sumó ni restó puntos esta ronda.</p>';
+    }else{
+      playerEntries.sort((a,b)=> b[1].total - a[1].total).forEach(([uid, d])=>{
+        const u = room.users[uid] || {name:'??? (salió de la sala)'};
+        const row = document.createElement('div');
+        row.className = 'log-player';
+        const color = d.total >= 0 ? 'var(--accent3)' : 'var(--down)';
+        // Agrupa las entradas por categoría (Momazos / ZZZ / Meme Buddy) y
+        // suma los montos de cada una, para mostrar un resumen corto en vez
+        // de una explicación larga y explícita de cada reacción.
+        const grouped = {};
+        d.entries.forEach(e=>{ grouped[e.reason] = (grouped[e.reason]||0) + e.amount; });
+        const summary = Object.entries(grouped)
+          .map(([label, amt])=> `${amt>0?'+':''}${amt} por ${label}`)
+          .join(', ');
+        row.innerHTML = `<div class="log-player-head">` +
+          `<strong>${escapeHtml(u.name)}</strong>` +
+          `<span style="color:${color};font-weight:800;">${d.total>0?'+':''}${d.total} pts</span>` +
+          `<button class="log-toggle" type="button" aria-label="Ver detalle">▾</button>` +
+          `</div>` +
+          `<div class="log-summary hidden">${escapeHtml(summary)}</div>`;
+        const toggleBtn = row.querySelector('.log-toggle');
+        const summaryEl = row.querySelector('.log-summary');
+        toggleBtn.onclick = ()=>{
+          summaryEl.classList.toggle('hidden');
+          toggleBtn.classList.toggle('open');
+        };
+        logBox.appendChild(row);
+      });
+    }
+
+    const memeBox = document.getElementById('roundMemeList');
+    memeBox.innerHTML = '';
+    const memeResults = breakdown ? breakdown.perMeme : [];
+    memeResults.forEach((m, idx)=>{
+      const tpl = tplById(m.templateId);
+      const div = document.createElement('div');
+      div.className = 'meme-result-card';
+      const color = m.points >= 0 ? 'var(--accent3)' : 'var(--down)';
+      div.innerHTML = `<div class="template-stage meme-result-stage" id="memeResultStage${idx}"></div>
+        <div class="meme-result-info">
+          <div style="font-weight:700;">${escapeHtml(m.authorName)}</div>
+          <div class="muted" style="font-size:13px;">👍 ${m.ups} &nbsp; ➖ ${m.mehs} &nbsp; 👎 ${m.downs}</div>
+          <div style="font-weight:800;color:${color};margin:4px 0 8px;">${m.points>0?'+':''}${m.points} pts</div>
+          <button class="ghost small" data-dl="${idx}">⬇️ Descargar meme</button>
+        </div>`;
+      memeBox.appendChild(div);
+      if(tpl) renderCaptionStage(document.getElementById('memeResultStage'+idx), tpl, m.texts, false);
+    });
+    memeBox.querySelectorAll('button[data-dl]').forEach(btn=>{
+      btn.onclick = ()=>{
+        const m = memeResults[parseInt(btn.dataset.dl, 10)];
+        const tpl = tplById(m.templateId);
+        if(!tpl){ alert('Esta plantilla ya no existe, no se puede descargar.'); return; }
+        downloadMeme(tpl, m.texts, `momazo-${m.authorName}-ronda${room.round}`);
       };
-      logBox.appendChild(row);
     });
   }
 
-  const memeBox = document.getElementById('roundMemeList');
-  memeBox.innerHTML = '';
-  const memeResults = breakdown ? breakdown.perMeme : [];
-  memeResults.forEach((m, idx)=>{
-    const tpl = tplById(m.templateId);
-    const div = document.createElement('div');
-    div.className = 'meme-result-card';
-    const color = m.points >= 0 ? 'var(--accent3)' : 'var(--down)';
-    div.innerHTML = `<div class="template-stage meme-result-stage" id="memeResultStage${idx}"></div>
-      <div class="meme-result-info">
-        <div style="font-weight:700;">${escapeHtml(m.authorName)}</div>
-        <div class="muted" style="font-size:13px;">👍 ${m.ups} &nbsp; ➖ ${m.mehs} &nbsp; 👎 ${m.downs}</div>
-        <div style="font-weight:800;color:${color};margin:4px 0 8px;">${m.points>0?'+':''}${m.points} pts</div>
-        <button class="ghost small" data-dl="${idx}">⬇️ Descargar meme</button>
-      </div>`;
-    memeBox.appendChild(div);
-    if(tpl) renderCaptionStage(document.getElementById('memeResultStage'+idx), tpl, m.texts, false);
-  });
-  memeBox.querySelectorAll('button[data-dl]').forEach(btn=>{
-    btn.onclick = ()=>{
-      const m = memeResults[parseInt(btn.dataset.dl, 10)];
-      const tpl = tplById(m.templateId);
-      if(!tpl){ alert('Esta plantilla ya no existe, no se puede descargar.'); return; }
-      downloadMeme(tpl, m.texts, `momazo-${m.authorName}-ronda${room.round}`);
-    };
-  });
-
-  // Estado del botón "Listo" y del contador de jugadores listos.
+  // Esto sí se actualiza en cada render (no reconstruye nada, solo texto y
+  // una clase), para que el contador de "listos" se vea al día sin volver
+  // a dibujar toda la lista de memes.
   const totalUsers = Object.keys(room.users).length;
   const readyMap = room.roundEndReady || {};
   const readyCount = Object.keys(readyMap).filter(uid => readyMap[uid] && room.users[uid]).length;
@@ -1390,7 +1432,7 @@ function renderLobby(){
   document.getElementById('lobbyInfo').textContent = `${templates.length} plantilla(s) disponibles · ${room.totalRounds} rondas · ${room.roundSeconds}s por ronda`;
   if(isHost()){
     const canStart = templates.length > 0;
-    document.getElementById('btnStartGame').disabled = !canStart;
+    document.getElementById('btnStartGame').disabled = !canStart || busyButtons.has('btnStartGame');
     document.getElementById('startHint').textContent = templates.length===0 ? 'Agrega una plantilla en Configuración antes de iniciar.' : '';
   }else{
     document.getElementById('startHint').textContent = 'Esperando a que el anfitrión 👑 inicie la partida...';
