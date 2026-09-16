@@ -1134,7 +1134,7 @@ function finalizeRoundScoring(r){
 }
 
 // ---------- Round end / game end ----------
-function renderScoreboard(container){
+function renderScoreboard(container, breakdown){
   container.innerHTML = '';
   // Recorremos los USUARIOS actuales de la sala (no room.scores directo):
   // si alguien se desconectó, su entrada en `users` se borra sola, pero su
@@ -1146,21 +1146,57 @@ function renderScoreboard(container){
     .sort((a,b)=> b[1]-a[1]);
   entries.forEach(([uid, score], i)=>{
     const u = room.users[uid];
+    const wrapper = document.createElement('div');
+    wrapper.className = 'scoreboard-entry';
+
     const row = document.createElement('div');
     row.className = 'scoreboard-row';
     const avatarHtml = `<img src="${u.avatar || DEFAULT_AVATAR}" style="width:36px;height:36px;border-radius:50%;object-fit:cover;">`;
-    row.innerHTML = `<div class="pos">${i+1}</div>${avatarHtml}<div style="flex:1;font-weight:600;">${escapeHtml(u.name)}</div><div style="font-weight:800;color:var(--accent);">${score} pts</div>`;
-    container.appendChild(row);
+    // El número grande es el acumulado de toda la partida; la flechita
+    // despliega de dónde salieron los puntos de ESTA ronda en particular.
+    const hasBreakdown = !!(breakdown && breakdown.perPlayer);
+    const toggleHtml = hasBreakdown
+      ? `<button class="log-toggle" type="button" aria-label="Ver detalle de la ronda">▾</button>`
+      : '';
+    row.innerHTML = `<div class="pos">${i+1}</div>${avatarHtml}` +
+      `<div style="flex:1;font-weight:600;">${escapeHtml(u.name)}</div>` +
+      `<div style="font-weight:800;color:var(--accent);">${score} pts</div>${toggleHtml}`;
+    wrapper.appendChild(row);
+
+    if(hasBreakdown){
+      const d = (breakdown.perPlayer[uid]) || { total: 0, entries: [] };
+      // Agrupamos por categoría y sumamos: si en una misma ronda ganaste
+      // Momazos en varios memes, se ve un solo "Momazo +600" en vez de
+      // una línea por cada meme.
+      const grouped = {};
+      d.entries.forEach(e=>{ grouped[e.reason] = (grouped[e.reason]||0) + e.amount; });
+      const detail = document.createElement('div');
+      detail.className = 'score-detail hidden';
+      const parts = Object.entries(grouped);
+      detail.innerHTML = parts.length
+        ? parts.map(([label, amt])=>{
+            const c = amt > 0 ? 'var(--accent3)' : 'var(--down)';
+            return `<span class="score-detail-item">${escapeHtml(label)} <strong style="color:${c};">${amt>0?'+':''}${amt}</strong></span>`;
+          }).join('')
+        : '<span class="muted">Sin puntos esta ronda.</span>';
+      wrapper.appendChild(detail);
+
+      const toggleBtn = row.querySelector('.log-toggle');
+      toggleBtn.onclick = ()=>{
+        detail.classList.toggle('hidden');
+        toggleBtn.classList.toggle('open');
+      };
+    }
+    container.appendChild(wrapper);
   });
 }
 
-// Pantalla de cierre de ronda: puntaje total, detalle de por qué cada quien
-// ganó/perdió puntos esta ronda, y la lista de memes de la ronda con botón
-// de descarga.
-// Solo reconstruimos la lista de memes y el detalle de puntos UNA VEZ por
-// ronda (no en cada re-render, que ocurre cada 1s para poder detectar el
-// avance automático). Antes se reconstruía todo el tiempo, lo que borraba
-// el estado de las flechitas desplegadas y hacía saltar el scroll de la
+// Pantalla de cierre de ronda: puntaje total (con el cambio de esta ronda
+// al lado del nombre de cada jugador) y la lista de memes de la ronda con
+// botón de descarga.
+// Solo reconstruimos la lista de memes UNA VEZ por ronda (no en cada
+// re-render, que ocurre cada 1s para poder detectar el avance automático).
+// Antes se reconstruía todo el tiempo, lo que hacía saltar el scroll de la
 // página mientras alguien intentaba desplazarse para ver los memes.
 let roundEndBuiltForRound = null;
 
@@ -1169,73 +1205,46 @@ function renderRoundEnd(){
   const buildKey = room.round + '_' + (breakdown ? 'ok' : 'none');
 
   if(roundEndBuiltForRound !== buildKey){
-    roundEndBuiltForRound = buildKey;
+    // Si algo puntual sale mal reconstruyendo (por ejemplo datos incompletos
+    // por una desincronización momentánea), que se vea lo que sí se pudo
+    // armar en vez de dejar toda la sección en blanco — y que quede el
+    // error anotado en la consola para poder diagnosticarlo si se repite.
+    try{
+      roundEndBuiltForRound = buildKey;
 
-    renderScoreboard(document.getElementById('roundScoreboard'));
+      renderScoreboard(document.getElementById('roundScoreboard'), breakdown);
 
-    const logBox = document.getElementById('roundPointLog');
-    logBox.innerHTML = '';
-    const playerEntries = breakdown ? Object.entries(breakdown.perPlayer) : [];
-    if(playerEntries.length === 0){
-      logBox.innerHTML = '<p class="muted">Nadie sumó ni restó puntos esta ronda.</p>';
-    }else{
-      playerEntries.sort((a,b)=> b[1].total - a[1].total).forEach(([uid, d])=>{
-        const u = room.users[uid] || {name:'??? (salió de la sala)'};
-        const row = document.createElement('div');
-        row.className = 'log-player';
-        const color = d.total >= 0 ? 'var(--accent3)' : 'var(--down)';
-        // Agrupa las entradas por categoría (Momazos / ZZZ / Meme Buddy) y
-        // suma los montos de cada una, para mostrar un resumen corto en vez
-        // de una explicación larga y explícita de cada reacción.
-        const grouped = {};
-        d.entries.forEach(e=>{ grouped[e.reason] = (grouped[e.reason]||0) + e.amount; });
-        const summary = Object.keys(grouped).length
-          ? Object.entries(grouped).map(([label, amt])=> `${label} ${amt>0?'+':''}${amt}`).join('   ')
-          : 'Sin cambios esta ronda';
-        row.innerHTML = `<div class="log-player-head">` +
-          `<strong>${escapeHtml(u.name)}</strong>` +
-          `<span style="color:${color};font-weight:800;">${d.total>0?'+':''}${d.total} pts</span>` +
-          `<button class="log-toggle" type="button" aria-label="Ver detalle">▾</button>` +
-          `</div>` +
-          `<div class="log-summary hidden">${escapeHtml(summary)}</div>`;
-        const toggleBtn = row.querySelector('.log-toggle');
-        const summaryEl = row.querySelector('.log-summary');
-        toggleBtn.onclick = ()=>{
-          summaryEl.classList.toggle('hidden');
-          toggleBtn.classList.toggle('open');
-        };
-        logBox.appendChild(row);
-      });
-    }
-
-    const memeBox = document.getElementById('roundMemeList');
-    memeBox.innerHTML = '';
-    const memeResults = breakdown ? breakdown.perMeme : [];
-    memeResults.forEach((m, idx)=>{
-      const tpl = tplById(m.templateId);
-      const div = document.createElement('div');
-      div.className = 'meme-result-card';
-      const color = m.points >= 0 ? 'var(--accent3)' : 'var(--down)';
-      div.innerHTML = `<div class="template-stage meme-result-stage" id="memeResultStage${idx}"></div>
-        <div class="meme-result-info">
-          <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap;">
-            <div style="font-weight:700;">${escapeHtml(m.authorName)}</div>
-            <div style="font-weight:800;color:${color};white-space:nowrap;">${m.points>0?'+':''}${m.points} pts</div>
-          </div>
-          <div class="muted" style="font-size:13px;">👍 ${m.ups} &nbsp; ➖ ${m.mehs} &nbsp; 👎 ${m.downs}</div>
-          <button class="ghost small" data-dl="${idx}">⬇️ Descargar meme</button>
-        </div>`;
-      memeBox.appendChild(div);
-      if(tpl) renderCaptionStage(document.getElementById('memeResultStage'+idx), tpl, m.texts, false);
-    });
-    memeBox.querySelectorAll('button[data-dl]').forEach(btn=>{
-      btn.onclick = ()=>{
-        const m = memeResults[parseInt(btn.dataset.dl, 10)];
+      const memeBox = document.getElementById('roundMemeList');
+      memeBox.innerHTML = '';
+      const memeResults = breakdown ? breakdown.perMeme : [];
+      memeResults.forEach((m, idx)=>{
         const tpl = tplById(m.templateId);
-        if(!tpl){ alert('Esta plantilla ya no existe, no se puede descargar.'); return; }
-        downloadMeme(tpl, m.texts, `momazo-${m.authorName}-ronda${room.round}`);
-      };
-    });
+        const div = document.createElement('div');
+        div.className = 'meme-result-card';
+        const color = m.points >= 0 ? 'var(--accent3)' : 'var(--down)';
+        div.innerHTML = `<div class="template-stage meme-result-stage" id="memeResultStage${idx}"></div>
+          <div class="meme-result-info">
+            <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap;">
+              <div style="font-weight:700;">${escapeHtml(m.authorName)}</div>
+              <div style="font-weight:800;color:${color};white-space:nowrap;">${m.points>0?'+':''}${m.points} pts</div>
+            </div>
+            <div class="muted" style="font-size:13px;">👍 ${m.ups} &nbsp; ➖ ${m.mehs} &nbsp; 👎 ${m.downs}</div>
+            <button class="ghost small" data-dl="${idx}">⬇️ Descargar meme</button>
+          </div>`;
+        memeBox.appendChild(div);
+        if(tpl) renderCaptionStage(document.getElementById('memeResultStage'+idx), tpl, m.texts, false);
+      });
+      memeBox.querySelectorAll('button[data-dl]').forEach(btn=>{
+        btn.onclick = ()=>{
+          const m = memeResults[parseInt(btn.dataset.dl, 10)];
+          const tpl = tplById(m.templateId);
+          if(!tpl){ alert('Esta plantilla ya no existe, no se puede descargar.'); return; }
+          downloadMeme(tpl, m.texts, `momazo-${m.authorName}-ronda${room.round}`);
+        };
+      });
+    }catch(err){
+      console.error('Error armando la pantalla de fin de ronda:', err);
+    }
   }
 
   // Esto sí se actualiza en cada render (no reconstruye nada, solo texto y
