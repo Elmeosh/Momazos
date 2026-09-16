@@ -296,6 +296,13 @@ document.getElementById('btnJoin').onclick = ()=>{
   // evita que se acumulen más jugadores fantasma y que el rol de anfitrión
   // se quede atascado en alguien que ya no está.
   dbRoomRef.child('users').child(myId).onDisconnect().remove();
+  // También limpiamos el puntaje viejo al desconectarse (no las
+  // submissions/votos: esos sí podrían seguir haciendo falta en la ronda en
+  // curso aunque alguien se desconecte a mitad de camino). Como cada sesión
+  // nueva genera un myId distinto, no tiene sentido conservar el puntaje de
+  // un id que ya no se va a volver a usar — y evita que se acumulen
+  // "puntajes fantasma" en la base de datos.
+  dbRoomRef.child('scores').child(myId).onDisconnect().remove();
   document.getElementById('headerUser').classList.remove('hidden');
   document.getElementById('headerName').textContent = myName;
   renderHeaderAvatar();
@@ -1059,6 +1066,10 @@ function checkAutoAdvanceReveal(){
 function finalizeRoundScoring(r){
   const perMeme = [];
   const perPlayer = {}; // uid -> { total, entries:[{reason, amount}] }
+  // Todos los jugadores conectados aparecen en el detalle, aunque no hayan
+  // sumado ni restado nada esta ronda — así cada uno tiene su propia fila
+  // con flechita, en vez de solo aparecer quienes tuvieron cambios.
+  Object.keys(r.users).forEach(uid=>{ perPlayer[uid] = { total: 0, entries: [] }; });
   function addDelta(uid, amount, reason){
     if(!uid || amount === 0) return;
     if(!perPlayer[uid]) perPlayer[uid] = { total: 0, entries: [] };
@@ -1125,9 +1136,16 @@ function finalizeRoundScoring(r){
 // ---------- Round end / game end ----------
 function renderScoreboard(container){
   container.innerHTML = '';
-  const entries = Object.entries(room.scores).sort((a,b)=>b[1]-a[1]);
+  // Recorremos los USUARIOS actuales de la sala (no room.scores directo):
+  // si alguien se desconectó, su entrada en `users` se borra sola, pero su
+  // puntaje viejo podía quedar dando vueltas en `scores` y aparecer como
+  // "??? (salió de la sala)" aunque nadie real esté detrás. Así solo se
+  // muestra gente que sigue en la sala.
+  const entries = Object.keys(room.users)
+    .map(uid => [uid, room.scores[uid] || 0])
+    .sort((a,b)=> b[1]-a[1]);
   entries.forEach(([uid, score], i)=>{
-    const u = room.users[uid] || {name:'??? (salió de la sala)', avatar: DEFAULT_AVATAR};
+    const u = room.users[uid];
     const row = document.createElement('div');
     row.className = 'scoreboard-row';
     const avatarHtml = `<img src="${u.avatar || DEFAULT_AVATAR}" style="width:36px;height:36px;border-radius:50%;object-fit:cover;">`;
@@ -1200,9 +1218,11 @@ function renderRoundEnd(){
       const color = m.points >= 0 ? 'var(--accent3)' : 'var(--down)';
       div.innerHTML = `<div class="template-stage meme-result-stage" id="memeResultStage${idx}"></div>
         <div class="meme-result-info">
-          <div style="font-weight:700;">${escapeHtml(m.authorName)}</div>
+          <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap;">
+            <div style="font-weight:700;">${escapeHtml(m.authorName)}</div>
+            <div style="font-weight:800;color:${color};white-space:nowrap;">${m.points>0?'+':''}${m.points} pts</div>
+          </div>
           <div class="muted" style="font-size:13px;">👍 ${m.ups} &nbsp; ➖ ${m.mehs} &nbsp; 👎 ${m.downs}</div>
-          <div style="font-weight:800;color:${color};margin:4px 0 8px;">${m.points>0?'+':''}${m.points} pts</div>
           <button class="ghost small" data-dl="${idx}">⬇️ Descargar meme</button>
         </div>`;
       memeBox.appendChild(div);
