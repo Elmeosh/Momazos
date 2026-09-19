@@ -1270,7 +1270,7 @@ function drawTextBoxesOnCanvas(ctx, tpl, texts, canvasWidth, canvasHeight){
       lines = wrapCanvasText(ctx, txt, boxW, fontSize);
       guard++;
     }
-    ctx.font = `800 ${fontSize}px Arial, sans-serif`;
+    ctx.font = `700 ${fontSize}px "Silkscreen", Arial, sans-serif`;
     const totalH = lines.length * fontSize * 1.05;
     let y = boxY + boxH/2 - totalH/2 + fontSize/2;
     ctx.lineWidth = Math.max(2, fontSize*0.12);
@@ -1379,7 +1379,7 @@ function downloadAnimatedGifWithText(tpl, texts, filename){
 }
 
 function wrapCanvasText(ctx, text, maxWidth, fontSize){
-  ctx.font = `800 ${fontSize}px Arial, sans-serif`;
+  ctx.font = `700 ${fontSize}px "Silkscreen", Arial, sans-serif`;
   const words = text.split(/\s+/).filter(Boolean);
   const lines = [];
   let cur = '';
