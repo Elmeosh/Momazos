@@ -195,15 +195,42 @@ const dbTplRef = firebase.database().ref(TPL_KEY);
 // ejemplo, apenas se reinicia la sala y queda con 0 usuarios). Como el
 // resto del juego asume que esos campos SIEMPRE son al menos {} o [],
 // normalizamos cualquier dato que venga de Firebase antes de usarlo.
+// Firebase no distingue "lista vacía" de "no existe": una lista vacía
+// desaparece, y una lista con huecos vuelve convertida en objeto
+// ({0:..., 2:...}). Esta ayuda deja SIEMPRE un array de verdad, así el
+// resto del código puede hacer .forEach/.map sin reventar.
+function toArray(val){
+  if(Array.isArray(val)) return val.filter(x => x !== null && x !== undefined);
+  if(val && typeof val === 'object') return Object.values(val);
+  return [];
+}
+
+// El desglose de la ronda viaja por Firebase, así que sufre lo mismo:
+// `perMeme` puede llegar undefined si la ronda no tuvo memes, y el
+// `entries: []` de cada jugador que no sumó ni restó puntos simplemente
+// no vuelve. Lo dejamos con la forma que el resto del código espera.
+function normalizeBreakdown(bd){
+  if(!bd) return null;
+  const perPlayer = {};
+  Object.entries(bd.perPlayer || {}).forEach(([uid, d])=>{
+    perPlayer[uid] = { total: (d && d.total) || 0, entries: toArray(d && d.entries) };
+  });
+  return {
+    perMeme: toArray(bd.perMeme).map(m => Object.assign({}, m, { texts: toArray(m.texts) })),
+    perPlayer
+  };
+}
+
 function normalizeRoom(val){
   const base = JSON.parse(JSON.stringify(DEFAULT_ROOM));
   if(!val) return base;
   const merged = Object.assign(base, val);
+  merged.lastRoundBreakdown = normalizeBreakdown(val.lastRoundBreakdown);
   merged.users = val.users || {};
   merged.submissions = val.submissions || {};
   merged.votes = val.votes || {};
   merged.scores = val.scores || {};
-  merged.revealOrder = val.revealOrder || [];
+  merged.revealOrder = toArray(val.revealOrder);
   merged.playerTemplates = val.playerTemplates || {};
   merged.playerRerollsLeft = val.playerRerollsLeft || {};
   merged.templateUseCounts = val.templateUseCounts || {};
@@ -1219,7 +1246,12 @@ function renderScoreboard(container, breakdown){
     wrapper.appendChild(row);
 
     if(hasBreakdown){
-      const d = (breakdown.perPlayer[uid]) || { total: 0, entries: [] };
+      const d = (breakdown.perPlayer && breakdown.perPlayer[uid]) || { total: 0, entries: [] };
+      // `entries` puede no venir (Firebase borra las listas vacías de quien
+      // no sumó ni restó puntos esta ronda). Sin esta línea, el forEach de
+      // abajo lanzaba un TypeError que abortaba toda la pantalla de fin de
+      // ronda antes de alcanzar a dibujar los memes.
+      d.entries = toArray(d.entries);
       // Agrupamos por categoría y sumamos: si en una misma ronda ganaste
       // Momazos en varios memes, se ve un solo "Momazo +600" en vez de
       // una línea por cada meme.
@@ -1265,13 +1297,14 @@ function renderRoundEnd(){
     // armar en vez de dejar toda la sección en blanco — y que quede el
     // error anotado en la consola para poder diagnosticarlo si se repite.
     try{
-      roundEndBuiltForRound = buildKey;
-
       renderScoreboard(document.getElementById('roundScoreboard'), breakdown);
 
       const memeBox = document.getElementById('roundMemeList');
       memeBox.innerHTML = '';
-      const memeResults = breakdown ? breakdown.perMeme : [];
+      const memeResults = toArray(breakdown && breakdown.perMeme);
+      if(!memeResults.length){
+        memeBox.innerHTML = '<p class="muted">Nadie envió meme en esta ronda.</p>';
+      }
       memeResults.forEach((m, idx)=>{
         const tpl = tplById(m.templateId);
         const div = document.createElement('div');
@@ -1287,7 +1320,14 @@ function renderRoundEnd(){
             <button class="ghost small" data-dl="${idx}">⬇️ Descargar meme</button>
           </div>`;
         memeBox.appendChild(div);
-        if(tpl) renderCaptionStage(document.getElementById('memeResultStage'+idx), tpl, m.texts, false);
+        const stageEl = document.getElementById('memeResultStage'+idx);
+        if(tpl){
+          renderCaptionStage(stageEl, tpl, m.texts, false);
+        }else{
+          // La plantilla se borró mientras se jugaba: al menos mostramos el
+          // texto para que la tarjeta no quede como un hueco en blanco.
+          stageEl.innerHTML = `<p class="muted" style="padding:12px;">Plantilla no disponible.<br>${escapeHtml(toArray(m.texts).join(' / '))}</p>`;
+        }
       });
       memeBox.querySelectorAll('button[data-dl]').forEach(btn=>{
         btn.onclick = ()=>{
@@ -1297,6 +1337,13 @@ function renderRoundEnd(){
           downloadMeme(tpl, m.texts, `momazo-${m.authorName}-ronda${room.round}`);
         };
       });
+
+      // Solo ahora la marcamos como construida. Antes esto estaba al
+      // PRINCIPIO del try: si algo fallaba a mitad de camino, la ronda
+      // quedaba marcada como "ya dibujada" y los renders siguientes (uno
+      // por segundo) saltaban el bloque entero, dejando la lista de memes
+      // vacía hasta el final de la ronda. Ahora, si falla, se reintenta.
+      roundEndBuiltForRound = buildKey;
     }catch(err){
       console.error('Error armando la pantalla de fin de ronda:', err);
     }
