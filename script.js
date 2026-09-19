@@ -111,6 +111,70 @@ let newTplDrafts = [];      // borrador por archivo: {imageData, name, boxes} | 
 let newTplBoxes = [];       // recuadros del archivo actualmente en pantalla (referencia al borrador)
 let drawingBox = null;
 
+// ---------- Estilo visual (se guarda por dispositivo, no por sala) ----------
+// Cada jugador puede elegir su propio estilo en cualquier momento; queda
+// guardado en el localStorage de SU navegador (no afecta a los demás ni se
+// sincroniza por Firebase), así que cada quien puede tener uno distinto.
+const THEME_KEY = 'momazos_theme_v1';
+const THEMES = [
+  { key: 'consola',  label: 'Consola HUD' },   // estilo por defecto
+  { key: 'arcade',   label: 'Neón de arcade' },
+  { key: 'terminal', label: 'Terminal verde' },
+  { key: 'corcho',   label: 'Corcho de notas' },
+  { key: 'retro95',  label: 'Retro escritorio' },
+  { key: 'ambar',    label: 'Terminal ámbar' },
+  { key: 'poker',    label: 'Mesa de póker' },
+  { key: 'casino',   label: 'Casino de neón' },
+];
+
+function currentTheme(){
+  try{ return localStorage.getItem(THEME_KEY) || THEMES[0].key; }
+  catch(e){ return THEMES[0].key; }
+}
+
+function applyTheme(key){
+  document.documentElement.setAttribute('data-theme', key);
+  try{ localStorage.setItem(THEME_KEY, key); }catch(e){ /* almacenamiento no disponible: el estilo no persistirá */ }
+  document.querySelectorAll('.theme-swatch').forEach(el=>{
+    el.classList.toggle('active', el.dataset.theme === key);
+  });
+  // Colorea la barra del navegador (en celulares) a juego con el tema.
+  const metaColor = document.getElementById('metaThemeColor');
+  if(metaColor){
+    const bg = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();
+    if(bg) metaColor.setAttribute('content', bg);
+  }
+}
+
+function renderThemeGrid(){
+  const grid = document.getElementById('themeGrid');
+  const active = currentTheme();
+  grid.innerHTML = THEMES.map(t => `
+    <button type="button" class="theme-swatch${t.key === active ? ' active' : ''}" data-theme="${t.key}">
+      <span class="swatch-preview"></span>
+      <span class="swatch-label">${t.label}</span>
+      <span class="swatch-check">${t.key === active ? '✓ En uso' : ''}</span>
+    </button>
+  `).join('');
+  grid.querySelectorAll('.theme-swatch').forEach(btn=>{
+    btn.onclick = ()=>{ applyTheme(btn.dataset.theme); renderThemeGrid(); };
+  });
+}
+
+// Aplica de inmediato el estilo guardado (o el de por defecto) al cargar la página.
+applyTheme(currentTheme());
+
+document.getElementById('btnTheme').onclick = ()=>{
+  renderThemeGrid();
+  document.getElementById('themeModal').classList.remove('hidden');
+};
+document.getElementById('btnCloseTheme').onclick = ()=>{
+  document.getElementById('themeModal').classList.add('hidden');
+};
+document.getElementById('themeModal').addEventListener('click', (e)=>{
+  if(e.target.id === 'themeModal') document.getElementById('themeModal').classList.add('hidden');
+});
+
 // ---------- Helpers de almacenamiento (Firebase Realtime Database) ----------
 // Estas funciones mantienen la MISMA firma que antes (síncronas, sin
 // promesas) para no tener que tocar el resto del juego: loadRoom()/

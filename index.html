@@ -6,8 +6,8 @@
 <title>Momazos</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=Chakra+Petch:wght@400;500;600;700&display=swap" rel="stylesheet">
-<meta name="theme-color" content="#0a0512">
+<link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=Chakra+Petch:wght@400;500;600;700&family=Cinzel:wght@600;700&display=swap" rel="stylesheet">
+<meta name="theme-color" content="#05080a" id="metaThemeColor">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -15,11 +15,28 @@
 
   <div class="top-bar">
     <div class="logo">Moma<span>zos</span></div>
-    <div id="headerUser" class="row hidden">
-      <div class="avatar" id="headerAvatar"></div>
-      <span id="headerName" style="font-weight:600;"></span>
-      <button class="ghost small hidden" id="btnEndGame">Terminar partida</button>
-      <button class="ghost small" id="btnLeaveRoom">Salir de la sala</button>
+    <div class="row">
+      <div id="headerUser" class="row hidden">
+        <div class="avatar" id="headerAvatar"></div>
+        <span id="headerName" style="font-weight:600;"></span>
+        <button class="ghost small hidden" id="btnEndGame">Terminar partida</button>
+        <button class="ghost small" id="btnLeaveRoom">Salir de la sala</button>
+      </div>
+      <button class="ghost small" id="btnTheme" title="Cambiar estilo visual">🎨 Estilo</button>
+    </div>
+  </div>
+
+  <!-- SELECTOR DE ESTILO VISUAL: el estilo elegido se guarda en este
+       navegador (localStorage), así que cada persona puede tener el suyo
+       sin afectar a los demás jugadores de la sala. -->
+  <div id="themeModal" class="theme-modal hidden">
+    <div class="theme-modal-inner panel">
+      <div class="row" style="justify-content:space-between;align-items:center;">
+        <h3 style="margin:0;">Elige un estilo visual</h3>
+        <button class="ghost small" id="btnCloseTheme">✖</button>
+      </div>
+      <p class="muted" style="margin:8px 0 14px;">Se guarda solo en este dispositivo.</p>
+      <div id="themeGrid" class="theme-grid"></div>
     </div>
   </div>
 
