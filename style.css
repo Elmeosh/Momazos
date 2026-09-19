@@ -573,7 +573,11 @@ input[type=file]::file-selector-button:hover{ background: rgba(var(--buddy-rgb),
   user-select:none;
   box-shadow: 0 0 18px rgba(var(--accent3-rgb),.4), inset 0 0 20px rgba(var(--accent3-rgb),.08);
 }
-.editor-canvas img{ display:block; width:100%; }
+.editor-canvas img{
+  display:block; width:100%;
+  -webkit-user-drag:none; user-drag:none; user-select:none;
+  -webkit-touch-callout:none;
+}
 .editor-box{
   position:absolute;
   border:2px solid var(--accent);
@@ -647,6 +651,13 @@ input[type=file]::file-selector-button:hover{ background: rgba(var(--buddy-rgb),
 .vote-btn.down.active{ background: var(--down); box-shadow: 0 0 22px rgba(var(--down-rgb),.8); }
 .vote-btn.neutral.active{ background: var(--meh); box-shadow: 0 0 22px rgba(var(--meh-rgb),.8); }
 .buddy-btn.active, .buddy-btn.ghost.active{ background: var(--buddy); box-shadow: 0 0 22px rgba(var(--buddy-rgb),.8); }
+
+/* Meme Buddy ya gastado en otro meme de esta ronda (solo hay 1 por ronda). */
+.buddy-btn.used, .buddy-btn.ghost.used{
+  opacity:.4; filter:grayscale(.6);
+  text-shadow:none; box-shadow:none;
+  cursor:not-allowed;
+}
 
 .banner{
   background: rgba(var(--accent2-rgb),.07);
@@ -848,7 +859,16 @@ hr{ border:none; border-top:1px solid var(--line); }
 /* ---- Mesa de póker: fichas redondas y fieltro ---- */
 [data-theme="poker"] .vote-btn, [data-theme="poker"] .buddy-btn{ border-radius:999px; }
 [data-theme="poker"] .avatar{ border-color: var(--accent); }
-[data-theme="poker"] .template-stage{ border-radius: 14px; }
+/* En este estilo --radius-sm vale 999px (todo es "pastilla"). Aplicado a un
+   recuadro que contiene una imagen, esa curva enorme recortaba las esquinas y
+   los lados de la plantilla (en el editor sobre todo, que no tenía override).
+   Aquí las imágenes van con esquinas rectas para que NUNCA se vean cortadas
+   (el marco dorado se mantiene), y los bloques altos usan un radio normal. */
+[data-theme="poker"] .template-stage,
+[data-theme="poker"] .editor-canvas{ border-radius: 0; }
+[data-theme="poker"] .meme-result-card,
+[data-theme="poker"] .side-block,
+[data-theme="poker"] .log-player{ border-radius: var(--radius); }
 
 /* ---- Casino de neón: encabezados tipo marquesina ---- */
 [data-theme="casino"] .logo{ letter-spacing:3px; }

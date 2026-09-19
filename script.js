@@ -24,6 +24,13 @@ const TPL_KEY = 'meme_templates_v1';
 // Cambios de plantilla ("rerolls") que recibe cada jugador al empezar cada ronda.
 const DEFAULT_REROLLS = 25;
 
+// Qué tan fuerte baja la probabilidad de una plantilla cada vez que ya le
+// salió a ese jugador. El peso de cada plantilla es PENALTY^(veces que ya salió
+// respecto a la que menos ha salido). Con 0.15, una plantilla que ya salió
+// una vez es ~6-7 veces MENOS probable que una que nunca ha salido, y una que
+// salió dos veces ~44 veces menos. (Antes era 1/(1+veces): apenas 2 veces menos.)
+const TEMPLATE_REPEAT_PENALTY = 0.15;
+
 const DEFAULT_ROOM = {
   users: {},
   hostId: null,
@@ -35,6 +42,7 @@ const DEFAULT_ROOM = {
   playerTemplates: {},     // { userId: templateId } — cada jugador ve su propia plantilla
   playerRerollsLeft: {},   // { userId: number }
   templateUseCounts: {},   // { userId: { templateId: veces que le salió } } — para bajar la probabilidad de repetir
+  playerSeenTemplates: {}, // { userId: { templateId: orden } } — plantillas que ya le salieron a ese jugador EN ESTA RONDA (el reroll no las repite)
   roundEndsAt: null,
   submissions: {},     // { userId: { templateId, texts:[...] } }
   revealOrder: [],      // [userId,...]
@@ -114,7 +122,7 @@ function svgTemplate2(){
 // Para quitarla de un navegador: abre con ?dueno=salir
 //
 // ⚠️ Cambia OWNER_CODE por algo tuyo que tus amigos no vayan a adivinar.
-const OWNER_CODE = 'Totalmente-Meados';
+const OWNER_CODE = 'CAMBIA-ESTE-CODIGO';
 const OWNER_KEY = 'meme_owner_v1';
 
 (function checkOwnerParam(){
@@ -278,6 +286,7 @@ function normalizeRoom(val){
   merged.playerTemplates = val.playerTemplates || {};
   merged.playerRerollsLeft = val.playerRerollsLeft || {};
   merged.templateUseCounts = val.templateUseCounts || {};
+  merged.playerSeenTemplates = val.playerSeenTemplates || {};
   merged.roundEndReady = val.roundEndReady || {};
   return merged;
 }
@@ -485,6 +494,7 @@ document.getElementById('btnEndGame').onclick = ()=>{
   room.round = 0;
   room.playerTemplates = {};
   room.playerRerollsLeft = {};
+  room.playerSeenTemplates = {};
   room.roundEndsAt = null;
   room.submissions = {};
   room.revealOrder = [];
@@ -553,14 +563,22 @@ document.getElementById('btnStartGame').onclick = ()=>{
   });
 };
 
-// Elige una plantilla al azar para UN jugador puntual. Todas las plantillas
-// pueden salir siempre (no se descarta ninguna), pero las que ya le salieron
-// antes a ESE jugador pesan menos en el sorteo, así es menos probable (no
-// imposible) que se repitan para él.
-function pickTemplateForPlayer(usedCounts){
-  const weighted = templates.map(t => ({
+// Elige una plantilla al azar para UN jugador puntual.
+//  - `excludeIds`: plantillas que NO pueden salir (las que ya vio en esta
+//    ronda, o la de la ronda anterior). Solo se ignora esta regla si no
+//    queda ninguna otra plantilla disponible.
+//  - Entre las que sí pueden salir, las que ya le han salido antes a ESE
+//    jugador pesan mucho menos en el sorteo (ver TEMPLATE_REPEAT_PENALTY).
+function pickTemplateForPlayer(usedCounts, excludeIds){
+  excludeIds = excludeIds || [];
+  let pool = templates.filter(t => !excludeIds.includes(t.id));
+  if(pool.length === 0) pool = templates.slice();
+  // Se compara contra la plantilla MENOS usada del grupo, así los pesos no
+  // se vuelven microscópicos a medida que pasan las partidas.
+  const minCount = Math.min(...pool.map(t => usedCounts[t.id] || 0));
+  const weighted = pool.map(t => ({
     t,
-    weight: 1 / (1 + (usedCounts[t.id] || 0))
+    weight: Math.pow(TEMPLATE_REPEAT_PENALTY, (usedCounts[t.id] || 0) - minCount)
   }));
   const total = weighted.reduce((sum, w) => sum + w.weight, 0);
   let roll = Math.random() * total;
@@ -577,13 +595,17 @@ function startRound(r, isFirst){
   r.roundEndsAt = Date.now() + r.roundSeconds*1000;
   // Cada jugador recibe su propia plantilla, sorteada de forma independiente
   // de la de los demás (antes era una sola para toda la sala).
+  const prevTemplates = r.playerTemplates || {}; // la plantilla con la que cada quien terminó la ronda anterior
   r.playerTemplates = {};
   r.playerRerollsLeft = {};
+  r.playerSeenTemplates = {};
   Object.keys(r.users).forEach(uid=>{
     const usedCounts = r.templateUseCounts[uid] || {};
-    const chosen = pickTemplateForPlayer(usedCounts);
+    // No repetir la plantilla con la que terminó la ronda anterior.
+    const chosen = pickTemplateForPlayer(usedCounts, prevTemplates[uid] ? [prevTemplates[uid]] : []);
     r.playerTemplates[uid] = chosen.id;
     r.playerRerollsLeft[uid] = DEFAULT_REROLLS;
+    r.playerSeenTemplates[uid] = { [chosen.id]: 0 };
     r.templateUseCounts[uid] = { ...usedCounts, [chosen.id]: (usedCounts[chosen.id] || 0) + 1 };
   });
   r.submissions = {};
@@ -783,6 +805,11 @@ document.getElementById('btnTplCancel').onclick = ()=>{
 
 const editorCanvas = document.getElementById('editorCanvas');
 editorCanvas.addEventListener('mousedown', (e)=>{
+  // e.preventDefault() evita que el navegador dispare su propio "arrastrar
+  // imagen" nativo cuando el clic empieza justo sobre el <img> — si eso
+  // pasa, el drag nativo se roba el gesto y los mousemove que dibujan el
+  // recuadro no llegan (por eso el recuadro no quedaba puesto).
+  e.preventDefault();
   const rect = editorCanvas.getBoundingClientRect();
   const x = ((e.clientX - rect.left) / rect.width) * 100;
   const y = ((e.clientY - rect.top) / rect.height) * 100;
@@ -790,6 +817,7 @@ editorCanvas.addEventListener('mousedown', (e)=>{
 });
 editorCanvas.addEventListener('mousemove', (e)=>{
   if(!drawingBox) return;
+  e.preventDefault();
   const rect = editorCanvas.getBoundingClientRect();
   const x = ((e.clientX - rect.left) / rect.width) * 100;
   const y = ((e.clientY - rect.top) / rect.height) * 100;
@@ -808,6 +836,10 @@ window.addEventListener('mouseup', ()=>{
   drawingBox = null;
   renderEditorBoxes();
 });
+// Segunda capa de protección: aunque el navegador intente iniciar un drag
+// nativo de la imagen (por ejemplo, si el clic viaja rápido), lo cancelamos
+// explícitamente para que nunca se robe el gesto de dibujar el recuadro.
+editorCanvas.addEventListener('dragstart', (e)=> e.preventDefault());
 
 function renderEditorBoxes(temp){
   const old = editorCanvas.querySelectorAll('.editor-box');
@@ -829,26 +861,67 @@ document.getElementById('btnUndoBox').onclick = ()=>{
   renderEditorBoxes();
 };
 
-// ---------- Reroll de plantilla dentro de la ronda (máx. 5 por ronda) ----------
+// ---------- Reroll de plantilla dentro de la ronda ----------
+// Reglas:
+//  - Nunca te da la plantilla actual ni NINGUNA que ya te haya salido en esta
+//    ronda (antes podía devolverte a la anterior, sobre todo con pocas
+//    plantillas, y parecía que el cambio "no había pasado" pero igual gastabas
+//    el reroll). Solo cuando ya viste TODAS se reinicia ese historial, y aun
+//    así se evitan las 2 más recientes si hay suficientes plantillas.
+//  - Entre las candidatas, las que más te han salido en la partida pesan menos.
+//  - Se escribe SOLO tu parte de la sala (tu plantilla, tus cambios restantes,
+//    etc.) con un update por rutas, en vez de reescribir la sala completa. Con
+//    la escritura completa, si otro jugador guardaba algo casi al mismo tiempo
+//    (enviar su meme, votar...) podía pisar tu cambio y te devolvía a la
+//    plantilla anterior.
 document.getElementById('btnRerollTemplate').onclick = ()=>{
+  if(busyButtons.has('btnRerollTemplate') || busyButtons.has('btnSubmitMeme')) return;
   room = loadRoom();
   if(room.status !== 'caption') return;
   if(room.submissions[myId]) return; // ya enviaste tu meme, no se puede recambiar
   const rerollsLeft = room.playerRerollsLeft[myId] !== undefined ? room.playerRerollsLeft[myId] : DEFAULT_REROLLS;
   if(rerollsLeft <= 0) return;
   const currentId = room.playerTemplates[myId];
-  const others = templates.filter(t => t.id !== currentId);
-  if(others.length === 0) return;
-  // Sin espera artificial: el cambio de plantilla ocurre al instante.
-  // El reroll siempre te da una plantilla DISTINTA a la actual (para que se
-  // note el cambio), elegida al azar entre el resto — esto no afecta a los
-  // demás jugadores ni a los memes que ya hayan enviado.
-  const next = others[Math.floor(Math.random()*others.length)];
+  if(templates.filter(t => t.id !== currentId).length === 0) return;
+
+  const maxOrder = (obj)=> Math.max(-1, ...Object.values(obj));
+  let seen = Object.assign({}, room.playerSeenTemplates[myId] || {});
+  if(currentId && seen[currentId] === undefined) seen[currentId] = maxOrder(seen) + 1;
+
+  // ¿Ya viste todas las plantillas disponibles en esta ronda? Reinicia el
+  // historial conservando solo las más recientes.
+  if(!templates.some(t => seen[t.id] === undefined)){
+    const keep = Object.keys(seen).sort((a,b)=> seen[b] - seen[a]).slice(0, Math.min(2, templates.length - 1));
+    seen = {};
+    keep.slice().reverse().forEach((id, i)=>{ seen[id] = i; });
+    if(currentId && seen[currentId] === undefined) seen[currentId] = maxOrder(seen) + 1;
+  }
+
   const usedCounts = room.templateUseCounts[myId] || {};
+  const next = pickTemplateForPlayer(usedCounts, Object.keys(seen).concat(currentId ? [currentId] : []));
+  if(!next || next.id === currentId) return;
+
+  seen[next.id] = maxOrder(seen) + 1;
+  const newCounts = { ...usedCounts, [next.id]: (usedCounts[next.id] || 0) + 1 };
+
+  // Bloqueo corto anti doble-clic: dos clics rápidos ya no gastan dos rerolls.
+  const btn = document.getElementById('btnRerollTemplate');
+  busyButtons.add('btnRerollTemplate');
+  btn.disabled = true;
+  setTimeout(()=>{ busyButtons.delete('btnRerollTemplate'); render(); }, 350);
+
+  // Copia local inmediata + escritura solo de MIS rutas en Firebase.
   room.playerTemplates[myId] = next.id;
   room.playerRerollsLeft[myId] = rerollsLeft - 1;
-  room.templateUseCounts[myId] = { ...usedCounts, [next.id]: (usedCounts[next.id] || 0) + 1 };
-  saveRoom(room);
+  room.templateUseCounts[myId] = newCounts;
+  room.playerSeenTemplates[myId] = seen;
+  dbRoomRef.update({
+    ['playerTemplates/' + myId]: next.id,
+    ['playerRerollsLeft/' + myId]: rerollsLeft - 1,
+    ['templateUseCounts/' + myId]: newCounts,
+    ['playerSeenTemplates/' + myId]: seen
+  }).catch(e=>console.error('No se pudo guardar el cambio de plantilla', e));
+  render();
 };
 
 // ---------- Caption screen ----------
@@ -857,8 +930,18 @@ document.getElementById('btnRerollTemplate').onclick = ()=>{
 // se muestra el texto real; si un recuadro puntual todavía está vacío, ese
 // recuadro en particular se ve punteado para indicar dónde va el texto.
 function renderCaptionStage(container, tpl, texts, outlineOnly){
-  container.innerHTML = `<img src="${tpl.image}">`;
-  const img = container.querySelector('img');
+  // Solo se vuelve a crear la <img> cuando cambia la plantilla. Antes se
+  // reemplazaba TODO el escenario en cada render (1 vez por segundo), lo que
+  // recargaba la imagen una y otra vez (se sentía pegado al cambiar de
+  // plantilla) y reiniciaba los GIF animados cada segundo.
+  let img = container.querySelector('img');
+  if(!img || container.dataset.tplId !== String(tpl.id)){
+    container.innerHTML = '';
+    img = document.createElement('img');
+    img.src = tpl.image;
+    container.appendChild(img);
+    container.dataset.tplId = tpl.id;
+  }
   const build = ()=> buildStageBoxes(container, tpl, texts, outlineOnly);
   // Si la imagen (o GIF) todavía no cargó, el contenedor puede no tener aún
   // su alto real, así que esperamos a que cargue para calcular bien el ajuste
@@ -982,7 +1065,7 @@ function renderCaptionScreen(){
 
   const rerollsLeft = room.playerRerollsLeft[myId] !== undefined ? room.playerRerollsLeft[myId] : DEFAULT_REROLLS;
   document.getElementById('rerollInfo').textContent = `Cambios de plantilla restantes: ${rerollsLeft}`;
-  document.getElementById('btnRerollTemplate').disabled = !!already || rerollsLeft <= 0 || templates.length <= 1 || busyButtons.has('btnRerollTemplate');
+  document.getElementById('btnRerollTemplate').disabled = !!already || rerollsLeft <= 0 || templates.length <= 1 || busyButtons.has('btnRerollTemplate') || busyButtons.has('btnSubmitMeme');
 }
 
 document.getElementById('btnSubmitMeme').onclick = ()=>{
@@ -991,8 +1074,13 @@ document.getElementById('btnSubmitMeme').onclick = ()=>{
   const texts = Array.from(areas).map(a=>a.value.trim());
   delayThenRun(document.getElementById('btnSubmitMeme'), 1000, ()=>{
     room = loadRoom();
+    if(room.status !== 'caption') return;
     room.submissions[myId] = { templateId: tpl.id, texts };
-    saveRoom(room);
+    // Solo se escribe MI entrega (no la sala completa) para no pisar los
+    // cambios que otros jugadores estén guardando al mismo tiempo.
+    dbRoomRef.child('submissions').child(myId).set(room.submissions[myId])
+      .catch(e=>console.error('No se pudo enviar el meme', e));
+    render();
   });
 };
 
@@ -1017,7 +1105,8 @@ function checkAutoSubmitOnTimeout(){
   room = loadRoom();
   if(room.status !== 'caption' || room.submissions[myId]) return; // ya avanzó u otra pestaña ya lo envió
   room.submissions[myId] = { templateId: tpl.id, texts };
-  saveRoom(room);
+  dbRoomRef.child('submissions').child(myId).set(room.submissions[myId])
+    .catch(e=>console.error('No se pudo enviar el meme', e));
 }
 
 function checkAutoAdvanceCaption(){
@@ -1073,13 +1162,26 @@ function getMyVote(authorId){
   return votesForThis[myId] || { rating: null, buddy: false };
 }
 
+// Meme Buddy: cada jugador tiene UNO por ronda. Devuelve el id del autor del
+// meme donde ya lo puso (o null si todavía no lo ha usado). Se recorre en el
+// orden en que aparecieron los memes, así el resultado siempre es el mismo
+// para todos los clientes.
+function myBuddyAuthorId(){
+  for(const aid of room.revealOrder){
+    const v = room.votes[aid] && room.votes[aid][myId];
+    if(v && v.buddy) return aid;
+  }
+  return null;
+}
+
 function renderRevealScreen(){
   const authorId = currentRevealUserId();
   if(!authorId) return;
   const sub = room.submissions[authorId];
   const tpl = tplById(sub.templateId);
-  const author = room.users[authorId] || {name:'???'};
-  document.getElementById('revealProgress').textContent = `Meme ${room.revealIndex+1} de ${room.revealOrder.length} — por ${author.name}`;
+  // El autor NO se muestra durante la votación (así nadie vota por
+  // amistad/rivalidad): se revela recién en la pantalla de fin de ronda.
+  document.getElementById('revealProgress').textContent = `Meme ${room.revealIndex+1} de ${room.revealOrder.length}`;
   const stage = document.getElementById('revealStage');
   renderCaptionStage(stage, tpl, sub.texts, false);
 
@@ -1101,37 +1203,70 @@ function renderRevealScreen(){
   btnDown.classList.toggle('active', myVote.rating === -1);
   btnBuddy.classList.toggle('active', !!myVote.buddy);
 
+  // Meme Buddy: solo 1 por ronda. Si ya lo usaste en OTRO meme, aquí queda
+  // bloqueado. Si lo usaste en ESTE, puedes quitarlo (mientras dure la
+  // votación de este meme) para guardarlo para otro.
+  const buddyAuthorId = myBuddyAuthorId();
+  const buddyUsedElsewhere = !!buddyAuthorId && buddyAuthorId !== authorId;
+  btnBuddy.classList.toggle('used', buddyUsedElsewhere);
+  btnBuddy.textContent = buddyUsedElsewhere ? '😍 Meme Buddy (ya usado)' : '😍 Meme Buddy';
+
   btnUp.disabled = locked;
   btnNeutral.disabled = locked;
   btnDown.disabled = locked;
-  btnBuddy.disabled = locked;
+  btnBuddy.disabled = locked || buddyUsedElsewhere;
 
-  document.getElementById('voteHint').textContent = isAuthor
-    ? 'No puedes votar tu propio meme.'
-    : timeUp
-      ? 'Se acabó el tiempo para votar este meme.'
-      : (myVote.rating === null ? 'Elige tu reacción — puedes cambiarla hasta que se acabe el tiempo.' : 'Puedes cambiar tu voto mientras no se acabe el tiempo.');
+  let hint;
+  if(isAuthor){
+    hint = 'No puedes votar tu propio meme.';
+  }else if(timeUp){
+    hint = 'Se acabó el tiempo para votar este meme.';
+  }else{
+    hint = (myVote.rating === null || myVote.rating === undefined)
+      ? 'Elige tu reacción — puedes cambiarla hasta que se acabe el tiempo.'
+      : 'Puedes cambiar tu voto mientras no se acabe el tiempo.';
+    if(buddyUsedElsewhere){
+      hint += ` Tu Meme Buddy de esta ronda ya lo usaste en el meme ${room.revealOrder.indexOf(buddyAuthorId) + 1}.`;
+    }else if(myVote.buddy){
+      hint += ' Tu Meme Buddy está en este meme (puedes quitarlo para usarlo en otro).';
+    }else{
+      hint += ' Ojo: solo tienes 1 Meme Buddy por ronda.';
+    }
+  }
+  document.getElementById('voteHint').textContent = hint;
 }
 
+// Guarda SOLO mi voto sobre este meme (en vez de reescribir la sala completa),
+// así si varios jugadores votan casi al mismo tiempo no se pisan entre sí.
+function writeMyVote(authorId, vote){
+  if(!room.votes[authorId]) room.votes[authorId] = {};
+  room.votes[authorId][myId] = vote;
+  dbRoomRef.child('votes').child(authorId).child(myId).set(vote)
+    .catch(e=>console.error('No se pudo guardar el voto', e));
+  render();
+}
 function castVote(value){
   const authorId = currentRevealUserId();
   if(!authorId || authorId === myId) return;
   if(room.voteEndsAt && Date.now() >= room.voteEndsAt) return;
   room = loadRoom();
-  if(!room.votes[authorId]) room.votes[authorId] = {};
-  const prev = room.votes[authorId][myId] || { rating: null, buddy: false };
-  room.votes[authorId][myId] = { rating: value, buddy: prev.buddy };
-  saveRoom(room);
+  const prev = getMyVote(authorId);
+  writeMyVote(authorId, { rating: value, buddy: !!prev.buddy });
 }
 function toggleBuddy(){
   const authorId = currentRevealUserId();
   if(!authorId || authorId === myId) return;
   if(room.voteEndsAt && Date.now() >= room.voteEndsAt) return;
   room = loadRoom();
-  if(!room.votes[authorId]) room.votes[authorId] = {};
-  const prev = room.votes[authorId][myId] || { rating: null, buddy: false };
-  room.votes[authorId][myId] = { rating: prev.rating, buddy: !prev.buddy };
-  saveRoom(room);
+  const prev = getMyVote(authorId);
+  // Un solo Meme Buddy por ronda: si ya está puesto en otro meme, no se puede
+  // poner aquí (sí se puede quitar del meme donde está).
+  const usedOn = myBuddyAuthorId();
+  if(!prev.buddy && usedOn && usedOn !== authorId) return;
+  writeMyVote(authorId, {
+    rating: (prev.rating === undefined ? null : prev.rating),
+    buddy: !prev.buddy
+  });
 }
 document.getElementById('btnVoteUp').onclick = ()=>castVote(1);
 document.getElementById('btnVoteNeutral').onclick = ()=>castVote(0);
@@ -1191,10 +1326,11 @@ function checkAutoAdvanceReveal(){
 // el último meme. Reglas:
 //  - El autor de cada meme gana 200 pts por cada Momazo (👍) que reciba y
 //    pierde 200 por cada ZZZ (👎) que reciba. "meh" no suma ni resta.
-//  - Cualquier jugador puede darle "Meme Buddy" a un meme (independiente de
-//    su propio voto). Por cada Momazo/ZZZ que ESE meme reciba de OTROS
-//    jugadores (sin contar el propio voto del buddy), el buddy gana/pierde
-//    50 pts. Puede haber más de un buddy por meme.
+//  - Cada jugador tiene UN "Meme Buddy" por ronda, que puede poner en el meme
+//    que quiera (independiente de su propio voto). Por cada Momazo/ZZZ que ESE
+//    meme reciba de OTROS jugadores (sin contar el propio voto del buddy), el
+//    buddy gana/pierde 50 pts. Puede haber más de un buddy por meme (de
+//    distintos jugadores).
 function finalizeRoundScoring(r){
   const perMeme = [];
   const perPlayer = {}; // uid -> { total, entries:[{reason, amount}] }
@@ -1208,6 +1344,11 @@ function finalizeRoundScoring(r){
     perPlayer[uid].total += amount;
     perPlayer[uid].entries.push({ amount, reason });
   }
+
+  // Cada jugador tiene 1 Meme Buddy por ronda. La interfaz ya lo impide, pero
+  // por si dos escrituras llegaran a cruzarse, aquí solo se cuenta el PRIMER
+  // buddy de cada jugador (en orden de aparición de los memes).
+  const buddyAlreadyUsed = {};
 
   r.revealOrder.forEach(authorId=>{
     const sub = r.submissions[authorId];
@@ -1233,6 +1374,8 @@ function finalizeRoundScoring(r){
     // Bonificación de los Meme Buddies de este meme.
     voterIds.forEach(buddyId=>{
       if(!votesObj[buddyId].buddy) return;
+      if(buddyAlreadyUsed[buddyId]) return; // ya gastó su buddy en un meme anterior
+      buddyAlreadyUsed[buddyId] = true;
       let otherUps=0, otherDowns=0;
       voterIds.forEach(otherId=>{
         if(otherId === buddyId) return;
