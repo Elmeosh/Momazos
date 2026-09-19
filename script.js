@@ -21,13 +21,16 @@ const DEFAULT_AVATAR = 'data:image/svg+xml;utf8,' + encodeURIComponent(
 const ROOM_KEY = 'meme_room_v1';
 const TPL_KEY = 'meme_templates_v1';
 
+// Cambios de plantilla ("rerolls") que recibe cada jugador al empezar cada ronda.
+const DEFAULT_REROLLS = 25;
+
 const DEFAULT_ROOM = {
   users: {},
   hostId: null,
   status: 'lobby', // lobby | caption | reveal | roundend | gameend
   round: 0,
   totalRounds: 5,
-  roundSeconds: 60,
+  roundSeconds: 120,
   votingSeconds: 30,
   playerTemplates: {},     // { userId: templateId } — cada jugador ve su propia plantilla
   playerRerollsLeft: {},   // { userId: number }
@@ -97,6 +100,47 @@ function svgTemplate2(){
 }
 
 // ---------- Estado local de sesión (no persiste al cerrar la pestaña) ----------
+
+// ---------- Llave de dueño ----------
+// La sala es pública para cualquiera con el enlace, pero la Configuración
+// (opciones de partida + agregar/eliminar plantillas) queda reservada para
+// UN navegador: el tuyo. La llave se guarda en el localStorage de ese
+// navegador, así que sobrevive a cerrar la pestaña y al reinicio del PC.
+//
+// Para activarla en tu computadora, abre el juego UNA VEZ con el código en
+// la dirección, así:
+//     ...tu-sitio.com/?dueno=CAMBIA-ESTE-CODIGO
+// Se guarda solo y la dirección vuelve a la normal. Después entras normal.
+// Para quitarla de un navegador: abre con ?dueno=salir
+//
+// ⚠️ Cambia OWNER_CODE por algo tuyo que tus amigos no vayan a adivinar.
+const OWNER_CODE = 'CAMBIA-ESTE-CODIGO';
+const OWNER_KEY = 'meme_owner_v1';
+
+(function checkOwnerParam(){
+  try{
+    const param = new URLSearchParams(location.search).get('dueno');
+    if(!param) return;
+    if(param === 'salir'){
+      localStorage.removeItem(OWNER_KEY);
+      alert('Llave de dueño eliminada de este navegador.');
+    }else if(param === OWNER_CODE){
+      localStorage.setItem(OWNER_KEY, OWNER_CODE);
+      alert('¡Listo! Este navegador quedó marcado como dueño de la sala.');
+    }else{
+      alert('Código incorrecto.');
+    }
+    // Limpiamos el código de la barra de direcciones para que no quede
+    // a la vista (ni en el historial compartido) después de usarlo.
+    history.replaceState(null, '', location.pathname);
+  }catch(e){ /* sin localStorage no se puede ser dueño en este navegador */ }
+})();
+
+function isOwner(){
+  try{ return localStorage.getItem(OWNER_KEY) === OWNER_CODE; }
+  catch(e){ return false; }
+}
+
 let myId = 'u_' + Math.random().toString(36).slice(2, 10);
 let myName = '';
 let myAvatar = null; // null = el jugador no subió foto propia; se usará DEFAULT_AVATAR
@@ -262,7 +306,10 @@ function isHost(){ return room && room.hostId === myId; }
 // jugador) los botones aparecen/desaparecen automáticamente para todos.
 function updateHostControls(){
   const host = isHost();
-  document.getElementById('btnSettings').classList.toggle('hidden', !host);
+  // La Configuración (opciones + plantillas) es solo del dueño, no de
+  // quien le haya tocado ser anfitrión. El resto de los botones de
+  // moderación siguen siendo del anfitrión de turno.
+  document.getElementById('btnSettings').classList.toggle('hidden', !isOwner());
   document.getElementById('btnResetRoom').classList.toggle('hidden', !host);
   document.getElementById('btnStartGame').classList.toggle('hidden', !host);
   const showEndGame = host && room.status !== 'lobby';
@@ -407,7 +454,7 @@ function renderHeaderAvatar(){
 
 // ---------- Lobby ----------
 document.getElementById('btnSettings').onclick = ()=>{
-  if(!isHost()) return; // solo el anfitrión puede entrar a Configuración
+  if(!isOwner()) return; // la Configuración es solo del dueño de la sala
   showScreen('settings'); populateSettingsForm();
 };
 document.getElementById('btnBackToLobby').onclick = ()=>{ showScreen('lobby'); render(); };
@@ -536,7 +583,7 @@ function startRound(r, isFirst){
     const usedCounts = r.templateUseCounts[uid] || {};
     const chosen = pickTemplateForPlayer(usedCounts);
     r.playerTemplates[uid] = chosen.id;
-    r.playerRerollsLeft[uid] = 5;
+    r.playerRerollsLeft[uid] = DEFAULT_REROLLS;
     r.templateUseCounts[uid] = { ...usedCounts, [chosen.id]: (usedCounts[chosen.id] || 0) + 1 };
   });
   r.submissions = {};
@@ -559,9 +606,10 @@ function populateSettingsForm(){
   renderTemplateThumbs();
 }
 document.getElementById('btnSaveSettings').onclick = ()=>{
+  if(!isOwner()) return;
   room = loadRoom();
   room.totalRounds = Math.max(1, parseInt(document.getElementById('cfgRounds').value)||5);
-  room.roundSeconds = Math.max(15, parseInt(document.getElementById('cfgSeconds').value)||60);
+  room.roundSeconds = Math.max(15, parseInt(document.getElementById('cfgSeconds').value)||120);
   room.votingSeconds = Math.max(5, parseInt(document.getElementById('cfgVoteSeconds').value)||30);
   saveRoom(room);
   alert('Opciones guardadas.');
@@ -597,6 +645,7 @@ function renderTemplateThumbs(){
   }
   box.querySelectorAll('button[data-tplid]').forEach(btn=>{
     btn.onclick = ()=>{
+      if(!isOwner()) return;
       const t = templates.find(x=>x.id === btn.dataset.tplid);
       if(!confirm(`¿Eliminar la plantilla "${t ? t.name : ''}"?`)) return;
       templates = loadTemplates().filter(x => x.id !== btn.dataset.tplid);
@@ -700,6 +749,7 @@ function resetTplUploadState(){
 // un recuadro dibujado (los que se hayan dejado sin recuadros se descartan
 // silenciosamente, ya que nunca se llegaron a configurar) y cierra el editor.
 document.getElementById('btnTplSaveAll').onclick = ()=>{
+  if(!isOwner()) return;
   commitCurrentDraft();
   const ready = newTplDrafts.filter(d => d && d.boxes.length > 0);
   if(ready.length === 0){
@@ -784,7 +834,7 @@ document.getElementById('btnRerollTemplate').onclick = ()=>{
   room = loadRoom();
   if(room.status !== 'caption') return;
   if(room.submissions[myId]) return; // ya enviaste tu meme, no se puede recambiar
-  const rerollsLeft = room.playerRerollsLeft[myId] !== undefined ? room.playerRerollsLeft[myId] : 5;
+  const rerollsLeft = room.playerRerollsLeft[myId] !== undefined ? room.playerRerollsLeft[myId] : DEFAULT_REROLLS;
   if(rerollsLeft <= 0) return;
   const currentId = room.playerTemplates[myId];
   const others = templates.filter(t => t.id !== currentId);
@@ -930,7 +980,7 @@ function renderCaptionScreen(){
   const totalUsers = Object.keys(room.users).length;
   document.getElementById('captionSubmittedInfo').textContent = `${submittedCount} de ${totalUsers} jugadores enviaron su meme.`;
 
-  const rerollsLeft = room.playerRerollsLeft[myId] !== undefined ? room.playerRerollsLeft[myId] : 5;
+  const rerollsLeft = room.playerRerollsLeft[myId] !== undefined ? room.playerRerollsLeft[myId] : DEFAULT_REROLLS;
   document.getElementById('rerollInfo').textContent = `Cambios de plantilla restantes: ${rerollsLeft}`;
   document.getElementById('btnRerollTemplate').disabled = !!already || rerollsLeft <= 0 || templates.length <= 1 || busyButtons.has('btnRerollTemplate');
 }
@@ -1628,7 +1678,7 @@ function render(){
   // porque otra pestaña lo reasignó), lo sacamos de ahí automáticamente.
   const settingsVisible = !document.getElementById('screen-settings').classList.contains('hidden');
   if(settingsVisible){
-    if(!isHost()){ showScreen('lobby'); renderLobby(); return; }
+    if(!isOwner()){ showScreen('lobby'); renderLobby(); return; }
     renderTemplateThumbs();
     return;
   }
