@@ -20,7 +20,7 @@
         <div class="avatar" id="headerAvatar"></div>
         <span id="headerName" style="font-weight:600;"></span>
         <button class="ghost small hidden" id="btnEndGame">Terminar partida</button>
-        <button class="ghost small" id="btnLeaveRoom">Salir de la sala</button>
+        <button class="ghost small" id="btnLeaveRoom">Salir del Lobby</button>
       </div>
       <button class="ghost small" id="btnTheme" title="Cambiar estilo visual">🎨 Estilo</button>
     </div>
@@ -32,23 +32,23 @@
   <div id="themeModal" class="theme-modal hidden">
     <div class="theme-modal-inner panel">
       <div class="row" style="justify-content:space-between;align-items:center;">
-        <h3 style="margin:0;">Elige un estilo visual</h3>
+        <h3 style="margin:0;">Elige un estilo</h3>
         <button class="ghost small" id="btnCloseTheme">✖</button>
       </div>
-      <p class="muted" style="margin:8px 0 14px;">Se guarda solo en este dispositivo.</p>
+      <p class="muted" style="margin:8px 0 14px;">Se guarda solo pa ti</p>
       <div id="themeGrid" class="theme-grid"></div>
     </div>
   </div>
 
   <!-- LOGIN -->
   <div id="screen-login" class="panel">
-    <h2>Elige tu nombre y sube tu foto de perfil</h2>
-    <label>Nombre de usuario</label>
-    <input type="text" id="loginName" maxlength="18" placeholder="Ej: PabloMemero">
+    <h2>Ponte Nombre y foto</h2>
+    <label>Nombre</label>
+    <input type="text" id="loginName" maxlength="18" placeholder="Ej: SixSeven">
     <div class="avatar-picker">
       <div class="avatar big" id="avatarPreview">📷</div>
       <div>
-        <label style="margin-top:0;">Foto de perfil (opcional)</label>
+        <label style="margin-top:0;">Foto</label>
         <input type="file" id="avatarUpload" accept="image/*">
       </div>
     </div>
@@ -59,10 +59,10 @@
   <!-- LOBBY -->
   <div id="screen-lobby" class="panel hidden">
     <div class="row" style="justify-content:space-between;">
-      <h2>Sala de espera</h2>
+      <h2>Lobby</h2>
       <div class="row">
         <button class="ghost small" id="btnSettings">Configuración</button>
-        <button class="ghost small" id="btnResetRoom">Reiniciar sala</button>
+        <button class="ghost small" id="btnResetRoom">Reiniciar Lobby</button>
       </div>
     </div>
     <p class="muted" id="lobbyInfo"></p>
@@ -149,10 +149,10 @@
         </div>
       </div>
       <div class="col">
-        <h3>Escribe tu meme</h3>
+        <h3>Hornea tu momazo</h3>
         <div id="captionFields" class="field-list"></div>
         <button id="btnSubmitMeme">Enviar meme</button>
-        <p id="captionDoneMsg" class="banner hidden">¡Meme enviado! Esperando a los demás...</p>
+        <p id="captionDoneMsg" class="banner hidden">Meme enviao, ahora espera gil</p>
       </div>
     </div>
   </div>
@@ -166,11 +166,11 @@
     <p class="muted" id="revealProgress"></p>
     <div class="template-stage" id="revealStage" style="max-width:520px;"></div>
     <div class="vote-row-outer" id="voteRowOuter">
-      <button class="ghost buddy-btn" id="btnMemeBuddy">🤝 Meme Buddy</button>
+      <button class="ghost buddy-btn" id="btnMemeBuddy">😍 Meme Buddy</button>
       <div class="vote-row" id="voteRow">
         <button class="vote-btn down" id="btnVoteDown">💤 ZZZ</button>
         <button class="vote-btn neutral" id="btnVoteNeutral">😐 meh</button>
-        <button class="vote-btn up" id="btnVoteUp">🔥 Momazo</button>
+        <button class="vote-btn up" id="btnVoteUp">🥵 Momazo</button>
       </div>
     </div>
     <p class="center muted" id="voteHint" style="margin-top:10px;"></p>
@@ -193,7 +193,7 @@
     <div class="center" style="margin-top:20px;">
       <div class="timer" id="roundEndTimer">30s</div>
       <p class="muted" id="roundEndReadyInfo" style="margin:8px 0;"></p>
-      <button class="ready-btn" id="btnRoundEndReady">✅ Estoy listo</button>
+      <button class="ready-btn" id="btnRoundEndReady">✅ Toy redy </button>
     </div>
   </div>
 
@@ -206,7 +206,6 @@
     </div>
   </div>
 
-  <footer class="hint">Comparte el enlace de este sitio con tus amigos — cada quien puede entrar desde su propio dispositivo. La sesión no persiste al cerrar la pestaña.</footer>
 </div>
 
 <!-- Firebase Realtime Database: reemplaza el localStorage de antes para que
