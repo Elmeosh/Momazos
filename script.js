@@ -1316,7 +1316,6 @@ function renderRoundEnd(){
               <div style="font-weight:700;">${escapeHtml(m.authorName)}</div>
               <div style="font-weight:800;color:${color};white-space:nowrap;">${m.points>0?'+':''}${m.points} pts</div>
             </div>
-            <div class="muted" style="font-size:13px;">👍 ${m.ups} &nbsp; ➖ ${m.mehs} &nbsp; 👎 ${m.downs}</div>
             <button class="ghost small" data-dl="${idx}">⬇️ Descargar meme</button>
           </div>`;
         memeBox.appendChild(div);
