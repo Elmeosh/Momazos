@@ -122,7 +122,7 @@ function svgTemplate2(){
 // Para quitarla de un navegador: abre con ?dueno=salir
 //
 // ⚠️ Cambia OWNER_CODE por algo tuyo que tus amigos no vayan a adivinar.
-const OWNER_CODE = 'CAMBIA-ESTE-CODIGO';
+const OWNER_CODE = 'Seven-Six';
 const OWNER_KEY = 'meme_owner_v1';
 
 (function checkOwnerParam(){
