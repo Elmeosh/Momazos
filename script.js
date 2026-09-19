@@ -970,8 +970,6 @@ function renderRevealScreen(){
     : timeUp
       ? 'Se acabó el tiempo para votar este meme.'
       : (myVote.rating === null ? 'Elige tu reacción — puedes cambiarla hasta que se acabe el tiempo.' : 'Puedes cambiar tu voto mientras no se acabe el tiempo.');
-
-  document.getElementById('btnNextReveal').classList.remove('hidden');
 }
 
 function castVote(value){
@@ -1017,13 +1015,6 @@ function advanceReveal(r){
     saveRoom(r);
   }
 }
-
-document.getElementById('btnNextReveal').onclick = ()=>{
-  delayThenRun(document.getElementById('btnNextReveal'), 1000, ()=>{
-    room = loadRoom();
-    advanceReveal(room);
-  });
-};
 
 // Avance automático de la votación: si se acaba el tiempo, o si todos los
 // jugadores con derecho a voto ya reaccionaron (en cuyo caso se acorta el
