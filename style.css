@@ -927,3 +927,27 @@ hr{ border:none; border-top:1px solid var(--line); }
 @media (max-width: 600px){
   .theme-grid{ grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
 }
+
+/* =========================================================
+   VENTANA DE SUBIDA DE PLANTILLAS
+   ========================================================= */
+.upload-modal{ z-index:60; }
+.upload-progress{
+  height:16px; border-radius:999px; overflow:hidden;
+  border:1.5px solid var(--accent);
+  background: var(--field);
+  margin:16px 0 8px;
+}
+.upload-progress-bar{
+  height:100%; width:0%;
+  background: var(--accent);
+  transition: width .25s ease;
+}
+/* Rayitas en movimiento mientras se sube, para que se note que sigue trabajando
+   incluso cuando una sola plantilla tarda un rato. */
+.upload-progress.working .upload-progress-bar{
+  background-image: repeating-linear-gradient(45deg, rgba(255,255,255,.28) 0 8px, transparent 8px 16px);
+  background-size: 22px 22px;
+  animation: uploadStripes .8s linear infinite;
+}
+@keyframes uploadStripes{ to{ background-position: 22px 0; } }

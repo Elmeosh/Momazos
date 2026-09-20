@@ -40,6 +40,20 @@
     </div>
   </div>
 
+  <!-- VENTANA DE SUBIDA DE PLANTILLAS: tapa toda la página mientras se suben
+       las plantillas (para que nadie toque nada a mitad de la subida) y al
+       final muestra el resultado real confirmado por Firebase. -->
+  <div id="uploadModal" class="theme-modal upload-modal hidden">
+    <div class="theme-modal-inner panel center">
+      <h3 id="uploadTitle" style="margin-top:0;">Subiendo plantillas…</h3>
+      <div class="upload-progress working" id="uploadBarWrap"><div class="upload-progress-bar" id="uploadBar"></div></div>
+      <p id="uploadStatus" style="font-weight:600;margin:8px 0;"></p>
+      <p id="uploadWarn" class="muted" style="margin:6px 0 0;">No cierres ni recargues la página hasta que termine.</p>
+      <div id="uploadResult"></div>
+      <button id="btnUploadClose" class="hidden" style="margin-top:14px;">Cerrar</button>
+    </div>
+  </div>
+
   <!-- LOGIN -->
   <div id="screen-login" class="panel">
     <h2>Ponte Nombre y foto</h2>
@@ -104,7 +118,7 @@
     <hr style="border:none;border-top:1px solid var(--line); margin:20px 0;">
 
     <h3>Agregar plantilla nueva</h3>
-    <p class="muted">Sube una o varias imágenes (o GIFs) y dibuja (clic + arrastrar) los recuadros donde irá el texto. Si eliges varias, se muestran de a una para configurarlas; puedes ir y volver entre ellas antes de guardar.</p>
+    <p class="muted">Sube una o varias imágenes (o GIFs) y dibuja (clic + arrastrar) los recuadros donde irá el texto. Si eliges varias, se muestran de a una para configurarlas; puedes ir y volver entre ellas antes de guardar. Los GIF pueden pesar hasta 4 MB cada uno.</p>
     <label>Imagen o GIF (puedes seleccionar varias a la vez)</label>
     <input type="file" id="newTplImage" accept="image/*,.gif" multiple>
     <span class="muted hidden" id="tplQueueLabel" style="display:block;margin-top:6px;font-weight:600;"></span>

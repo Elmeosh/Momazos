@@ -21,6 +21,15 @@ const DEFAULT_AVATAR = 'data:image/svg+xml;utf8,' + encodeURIComponent(
 const ROOM_KEY = 'meme_room_v1';
 const TPL_KEY = 'meme_templates_v1';
 
+// Subida de plantillas nuevas.
+// Un GIF se guarda tal cual (sin recomprimir), y todos los jugadores descargan
+// TODAS las plantillas al entrar, así que un GIF enorme hace lenta la sala
+// entera (y Firebase rechaza valores de texto de más de 10 MB). Por eso hay un
+// tope por archivo. Las imágenes normales (JPG/PNG) se reducen solas a 800px.
+const MAX_GIF_BYTES = 4 * 1024 * 1024;
+// Cuánto esperar la confirmación de Firebase por cada plantilla subida.
+const UPLOAD_TIMEOUT_MS = 120000;
+
 // Cambios de plantilla ("rerolls") que recibe cada jugador al empezar cada ronda.
 const DEFAULT_REROLLS = 25;
 
@@ -122,7 +131,7 @@ function svgTemplate2(){
 // Para quitarla de un navegador: abre con ?dueno=salir
 //
 // ⚠️ Cambia OWNER_CODE por algo tuyo que tus amigos no vayan a adivinar.
-const OWNER_CODE = 'Seven-Six';
+const OWNER_CODE = 'CAMBIA-ESTE-CODIGO';
 const OWNER_KEY = 'meme_owner_v1';
 
 (function checkOwnerParam(){
@@ -232,7 +241,7 @@ document.getElementById('themeModal').addEventListener('click', (e)=>{
 // promesas) para no tener que tocar el resto del juego: loadRoom()/
 // loadTemplates() devuelven al instante la última copia recibida de
 // Firebase (guardada en las variables `room`/`templates`), y saveRoom()/
-// saveTemplates() actualizan esa copia local de inmediato (para que el
+// saveRoom() actualiza esa copia local de inmediato (para que el
 // resto del código que sigue ejecutándose en la misma función ya la vea
 // actualizada) y además la mandan a Firebase en segundo plano.
 // La sincronización real en tiempo real entre dispositivos pasa por los
@@ -301,9 +310,52 @@ function saveRoom(r){
 function loadTemplates(){
   return (templates && templates.length) ? templates : builtinTemplates();
 }
-function saveTemplates(arr){
-  templates = arr;
-  dbTplRef.set(arr).catch(e=>console.error('No se pudieron guardar las plantillas en Firebase', e));
+
+// ---- Plantillas en Firebase ----
+// ANTES: todas las plantillas viajaban juntas en UN solo arreglo, y cada vez
+// que se agregaba o borraba una se volvía a subir el arreglo completo (con
+// todas las imágenes). Con varias plantillas (sobre todo GIFs) eso pasaba del
+// límite de escritura de Firebase (16 MB): la subida fallaba en silencio, la
+// página se congelaba armando ese paquete gigante, y al recargar las
+// plantillas nuevas ya no estaban (solo existían en la copia local).
+// AHORA: cada plantilla es un hijo propio (meme_templates_v1/<id>). Se sube de
+// a una, se espera la confirmación real de Firebase por cada una, y borrar
+// una plantilla solo borra esa. Lo que ya estaba guardado como arreglo (hijos
+// "0", "1", "2"...) se sigue leyendo sin migrar nada.
+let tplDbCount = 0; // cuántas plantillas hay REALMENTE guardadas (0 = se muestran las de ejemplo)
+
+function parseTemplatesSnapshot(val){
+  if(!val) return [];
+  const entries = Array.isArray(val)
+    ? val.map((t, i)=>[String(i), t])
+    : Object.entries(val);
+  return entries
+    .filter(([k, t])=> t && typeof t === 'object' && t.image)
+    .map(([k, t])=> Object.assign({}, t, { boxes: toArray(t.boxes), _key: k }))
+    .sort((a, b)=> (a.createdAt || 0) - (b.createdAt || 0));
+}
+
+function withTimeout(promise, ms, message){
+  let timer;
+  const timeout = new Promise((_, reject)=>{ timer = setTimeout(()=> reject(new Error(message)), ms); });
+  return Promise.race([promise, timeout]).finally(()=> clearTimeout(timer));
+}
+
+function describeFbError(e){
+  const msg = (e && (e.message || e.code)) ? String(e.message || e.code) : String(e);
+  if(/permission_denied/i.test(msg)) return msg + ' (las reglas de tu Firebase no permiten escribir aquí)';
+  return msg;
+}
+
+// Si todavía no hay plantillas guardadas de verdad, en pantalla se ven las 2
+// de ejemplo. Antes de agregar o borrar la primera, se guardan esas 2 también
+// (igual que antes), para que sigan ahí junto con las nuevas.
+async function materializeBuiltinsIfNeeded(){
+  if(tplDbCount > 0) return;
+  const map = {};
+  builtinTemplates().forEach((t, i)=>{ map[t.id] = Object.assign({}, t, { createdAt: i }); });
+  await withTimeout(dbTplRef.update(map), UPLOAD_TIMEOUT_MS,
+    'Firebase no respondió al preparar las plantillas base (¿conexión lenta o caída?)');
 }
 
 function tplById(id){ return templates.find(t => t.id === id); }
@@ -410,7 +462,34 @@ function fileToDataUrl(file){
 
 function processTemplateImageFile(file){
   const isGif = file.type === 'image/gif' || /\.gif$/i.test(file.name);
+  if(isGif && file.size > MAX_GIF_BYTES){
+    const mb = (file.size / 1048576).toFixed(1);
+    const max = (MAX_GIF_BYTES / 1048576).toFixed(0);
+    return Promise.reject(new Error(`"${file.name}" pesa ${mb} MB y el máximo para un GIF es ${max} MB (si no, la sala entera se pone lenta para todos). Comprímelo o acórtalo y vuelve a subirlo.`));
+  }
   return isGif ? fileToDataUrl(file) : resizeImageFile(file, 800, 800);
+}
+
+// Miniatura chiquita (primer cuadro, ~3 KB) para la lista de Configuración: así
+// esa lista no tiene que decodificar cada imagen/GIF completo solo para dibujar
+// un cuadrito de 56x40.
+function makeThumbDataUrl(dataUrl, maxW = 160, maxH = 120){
+  return new Promise(resolve=>{
+    const img = new Image();
+    img.onload = ()=>{
+      try{
+        const ratio = Math.min(maxW / img.width, maxH / img.height, 1);
+        const w = Math.max(1, Math.round(img.width * ratio));
+        const h = Math.max(1, Math.round(img.height * ratio));
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        c.getContext('2d').drawImage(img, 0, 0, w, h);
+        resolve(c.toDataURL('image/jpeg', 0.7));
+      }catch(e){ resolve(null); }
+    };
+    img.onerror = ()=> resolve(null);
+    img.src = dataUrl;
+  });
 }
 
 renderAvatarPreview();
@@ -547,6 +626,7 @@ function leaveSession(){
 // Intento de limpieza si cierran la pestaña o el navegador (no es 100% garantizado
 // en todos los navegadores, pero ayuda a que no queden usuarios "fantasma").
 window.addEventListener('beforeunload', ()=>{
+  if(uploadInProgress) return; // el aviso de "hay una subida en curso" lo maneja otro listener
   if(joined) removeMeFromRoom();
 });
 
@@ -639,8 +719,16 @@ document.getElementById('btnSaveSettings').onclick = ()=>{
 
 let templatesExpanded = false;
 
+// Firma de lo que hay dibujado ahora mismo en la lista. render() corre cada
+// segundo; antes esta lista se destruía y se volvía a crear (con todas sus
+// imágenes) en CADA una de esas pasadas, lo que con muchas plantillas dejaba
+// toda la página lenta. Ahora solo se reconstruye si algo cambió de verdad.
+let thumbsSig = null;
 function renderTemplateThumbs(){
   document.getElementById('tplCount').textContent = templates.length;
+  const sig = templatesExpanded + '|' + templates.map(t => t.id).join(',');
+  if(sig === thumbsSig) return;
+  thumbsSig = sig;
   const box = document.getElementById('templateThumbs');
   const toggleBtn = document.getElementById('btnToggleTemplates');
   box.innerHTML = '';
@@ -654,7 +742,7 @@ function renderTemplateThumbs(){
   visible.forEach(t=>{
     const div = document.createElement('div');
     div.className = 'template-thumb';
-    div.innerHTML = `<img src="${t.image}"><div class="tpl-info"><div style="font-weight:600;">${escapeHtml(t.name)}</div><div class="muted" style="font-size:12px;">${t.boxes.length} recuadro(s)</div></div><button class="small danger" data-tplid="${t.id}">🗑️ Eliminar</button>`;
+    div.innerHTML = `<img src="${t.thumb || t.image}" loading="lazy" decoding="async"><div class="tpl-info"><div style="font-weight:600;">${escapeHtml(t.name)}</div><div class="muted" style="font-size:12px;">${t.boxes.length} recuadro(s)</div></div><button class="small danger" data-tplid="${t.id}">🗑️ Eliminar</button>`;
     box.appendChild(div);
   });
   if(!templatesExpanded && templates.length > 1){
@@ -666,14 +754,24 @@ function renderTemplateThumbs(){
     box.appendChild(more);
   }
   box.querySelectorAll('button[data-tplid]').forEach(btn=>{
-    btn.onclick = ()=>{
+    btn.onclick = async ()=>{
       if(!isOwner()) return;
       const t = templates.find(x=>x.id === btn.dataset.tplid);
-      if(!confirm(`¿Eliminar la plantilla "${t ? t.name : ''}"?`)) return;
-      templates = loadTemplates().filter(x => x.id !== btn.dataset.tplid);
-      saveTemplates(templates);
-      renderTemplateThumbs();
-      render();
+      if(!t) return;
+      if(!confirm(`¿Eliminar la plantilla "${t.name}"?`)) return;
+      btn.disabled = true;
+      try{
+        await materializeBuiltinsIfNeeded();
+        // Las plantillas guardadas con el formato viejo viven bajo su número
+        // (0, 1, 2...); las nuevas y las de ejemplo, bajo su id.
+        const key = (t._key !== undefined) ? t._key : t.id;
+        await withTimeout(dbTplRef.child(String(key)).remove(), 30000,
+          'Firebase no respondió (¿conexión lenta o caída?)');
+      }catch(e){
+        console.error('No se pudo eliminar la plantilla', e);
+        alert('No se pudo eliminar la plantilla: ' + describeFbError(e));
+        btn.disabled = false;
+      }
     };
   });
 }
@@ -714,10 +812,22 @@ async function loadCurrentNewTplFile(){
   if(!file) return;
   let draft = newTplDrafts[newTplFileIndex];
   if(!draft){
-    const imageData = await processTemplateImageFile(file);
-    const suggestedName = file.name.replace(/\.[^/.]+$/, '');
-    draft = { imageData, name: suggestedName, boxes: [] };
-    newTplDrafts[newTplFileIndex] = draft;
+    try{
+      const imageData = await processTemplateImageFile(file);
+      const thumb = await makeThumbDataUrl(imageData);
+      const suggestedName = file.name.replace(/\.[^/.]+$/, '');
+      draft = { imageData, thumb, name: suggestedName, boxes: [] };
+      newTplDrafts[newTplFileIndex] = draft;
+    }catch(err){
+      // Archivo inválido o demasiado pesado: se avisa y se saca de la cola
+      // para poder seguir con las demás imágenes.
+      alert((err && err.message) ? err.message : `No se pudo leer "${file.name}".`);
+      newTplFiles.splice(newTplFileIndex, 1);
+      newTplDrafts.splice(newTplFileIndex, 1);
+      if(newTplFiles.length === 0){ resetTplUploadState(); return; }
+      newTplFileIndex = Math.min(newTplFileIndex, newTplFiles.length - 1);
+      return loadCurrentNewTplFile();
+    }
   }
   newTplBoxes = draft.boxes;
   document.getElementById('editorImg').src = draft.imageData;
@@ -745,18 +855,25 @@ function updateTplQueueLabel(){
     : 'Dibuja al menos un recuadro de texto antes de guardar.';
 }
 
+// Mientras se procesa una imagen (un GIF grande tarda un momento) se ignoran
+// clics repetidos en Anterior/Siguiente, para que no se crucen dos cargas.
+let tplNavBusy = false;
 document.getElementById('btnTplPrev').onclick = async ()=>{
+  if(tplNavBusy) return;
   commitCurrentDraft();
   if(newTplFileIndex <= 0) return;
-  newTplFileIndex -= 1;
-  await loadCurrentNewTplFile();
+  tplNavBusy = true;
+  try{ newTplFileIndex -= 1; await loadCurrentNewTplFile(); }
+  finally{ tplNavBusy = false; }
 };
 
 document.getElementById('btnTplNext').onclick = async ()=>{
+  if(tplNavBusy) return;
   commitCurrentDraft();
   if(newTplFileIndex >= newTplFiles.length - 1) return;
-  newTplFileIndex += 1;
-  await loadCurrentNewTplFile();
+  tplNavBusy = true;
+  try{ newTplFileIndex += 1; await loadCurrentNewTplFile(); }
+  finally{ tplNavBusy = false; }
 };
 
 function resetTplUploadState(){
@@ -767,33 +884,116 @@ function resetTplUploadState(){
   document.getElementById('tplQueueLabel').classList.add('hidden');
 }
 
-// Guarda como plantillas reales todos los borradores que ya tengan al menos
-// un recuadro dibujado (los que se hayan dejado sin recuadros se descartan
-// silenciosamente, ya que nunca se llegaron a configurar) y cierra el editor.
-document.getElementById('btnTplSaveAll').onclick = ()=>{
-  if(!isOwner()) return;
+// ---------- Subida de plantillas con ventana de progreso ----------
+// Mientras se sube, una ventana tapa toda la página (no se puede tocar nada)
+// y muestra "Subiendo 3 de 12...". Cada plantilla se sube por separado y solo
+// se da por guardada cuando Firebase CONFIRMA que la recibió. Al final la misma
+// ventana dice cuántas quedaron guardadas y cuáles fallaron (y por qué).
+let uploadInProgress = false;
+
+window.addEventListener('beforeunload', (e)=>{
+  if(!uploadInProgress) return;
+  e.preventDefault();
+  e.returnValue = ''; // el navegador muestra su aviso "¿seguro que quieres salir?"
+});
+
+function openUploadModal(total){
+  document.getElementById('uploadTitle').textContent = 'Subiendo plantillas…';
+  document.getElementById('uploadBarWrap').classList.add('working');
+  document.getElementById('uploadBarWrap').classList.remove('hidden');
+  document.getElementById('uploadBar').style.width = '0%';
+  document.getElementById('uploadStatus').textContent = `Preparando ${total} plantilla(s)…`;
+  document.getElementById('uploadWarn').classList.remove('hidden');
+  document.getElementById('uploadResult').innerHTML = '';
+  document.getElementById('btnUploadClose').classList.add('hidden');
+  document.getElementById('uploadModal').classList.remove('hidden');
+}
+function setUploadProgress(done, total, name){
+  document.getElementById('uploadBar').style.width = Math.round(done / total * 100) + '%';
+  document.getElementById('uploadStatus').textContent = done < total
+    ? `Subiendo ${done + 1} de ${total}: ${name || 'sin nombre'}`
+    : `Confirmando ${total} de ${total}…`;
+}
+function finishUploadModal(title, htmlResult){
+  document.getElementById('uploadTitle').textContent = title;
+  document.getElementById('uploadBarWrap').classList.remove('working');
+  document.getElementById('uploadStatus').textContent = '';
+  document.getElementById('uploadWarn').classList.add('hidden');
+  document.getElementById('uploadResult').innerHTML = htmlResult;
+  document.getElementById('btnUploadClose').classList.remove('hidden');
+}
+document.getElementById('btnUploadClose').onclick = ()=>{
+  document.getElementById('uploadModal').classList.add('hidden');
+};
+
+document.getElementById('btnTplSaveAll').onclick = async ()=>{
+  if(!isOwner() || uploadInProgress) return;
   commitCurrentDraft();
-  const ready = newTplDrafts.filter(d => d && d.boxes.length > 0);
+  const ready = [];
+  newTplDrafts.forEach((d, i)=>{ if(d && d.boxes.length > 0) ready.push({ d, i }); });
   if(ready.length === 0){
     alert('Dibuja al menos un recuadro de texto sobre la imagen antes de guardar.');
     return;
   }
-  templates = loadTemplates();
-  ready.forEach(d=>{
-    templates.push({
-      id: 'tpl_' + Math.random().toString(36).slice(2,9),
-      name: d.name || 'Sin nombre',
-      image: d.imageData,
-      boxes: d.boxes
+
+  uploadInProgress = true;
+  openUploadModal(ready.length);
+  const savedIdx = new Set();
+  const failed = []; // { name, error }
+
+  try{
+    await materializeBuiltinsIfNeeded();
+    for(let n = 0; n < ready.length; n++){
+      const { d, i } = ready[n];
+      setUploadProgress(n, ready.length, d.name);
+      const id = 'tpl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      const tpl = {
+        id,
+        name: d.name || 'Sin nombre',
+        image: d.imageData,
+        boxes: d.boxes,
+        createdAt: Date.now() + n
+      };
+      if(d.thumb) tpl.thumb = d.thumb; // Firebase no acepta valores undefined
+      try{
+        // La promesa de set() solo se cumple cuando el servidor confirmó.
+        await withTimeout(dbTplRef.child(id).set(tpl), UPLOAD_TIMEOUT_MS,
+          'Firebase no confirmó la subida a tiempo (¿conexión lenta o caída?). Si tu conexión era lenta, puede que igual aparezca después.');
+        savedIdx.add(i);
+      }catch(e){
+        console.error('No se pudo subir la plantilla', d.name, e);
+        failed.push({ name: d.name || 'Sin nombre', error: describeFbError(e) });
+      }
+      setUploadProgress(n + 1, ready.length, d.name);
+    }
+  }catch(e){
+    console.error('No se pudieron preparar las plantillas base', e);
+    ready.forEach(({ d, i })=>{
+      if(!savedIdx.has(i)) failed.push({ name: d.name || 'Sin nombre', error: describeFbError(e) });
     });
-  });
-  saveTemplates(templates);
-  renderTemplateThumbs();
+  }
+  uploadInProgress = false;
+
   const skipped = newTplDrafts.length - ready.length;
-  resetTplUploadState();
-  alert(skipped > 0
-    ? `${ready.length} plantilla(s) guardada(s). ${skipped} imagen(es) sin recuadros no se guardaron.`
-    : `${ready.length} plantilla(s) guardada(s).`);
+  if(failed.length === 0){
+    resetTplUploadState();
+    renderTemplateThumbs();
+    finishUploadModal('✅ ¡Listo!',
+      `<p><b>${savedIdx.size} plantilla(s) guardada(s)</b> y confirmadas por Firebase.</p>` +
+      (skipped > 0 ? `<p class="muted">${skipped} imagen(es) sin recuadros no se guardaron.</p>` : ''));
+  }else{
+    // Se quitan de la cola las que sí se guardaron; las que fallaron se quedan
+    // en el editor (con sus recuadros) para poder reintentar con el mismo botón.
+    newTplFiles = newTplFiles.filter((_, i)=> !savedIdx.has(i));
+    newTplDrafts = newTplDrafts.filter((_, i)=> !savedIdx.has(i));
+    newTplFileIndex = 0;
+    if(newTplFiles.length) await loadCurrentNewTplFile(); else resetTplUploadState();
+    const items = failed.map(f => `<li><b>${escapeHtml(f.name)}</b> — ${escapeHtml(f.error)}</li>`).join('');
+    finishUploadModal('⚠️ Algunas no se guardaron',
+      `<p>${savedIdx.size} guardada(s), <b>${failed.length} con error</b>:</p>` +
+      `<ul style="text-align:left;margin:8px 0;padding-left:20px;">${items}</ul>` +
+      `<p class="muted">Siguen en el editor: revisa el error y vuelve a pulsar "Guardar plantilla(s)".</p>`);
+  }
 };
 
 // Descarta toda la selección actual (ninguna imagen configurada en esta
@@ -1876,8 +2076,9 @@ dbRoomRef.on('value', snapshot=>{
 });
 
 dbTplRef.on('value', snapshot=>{
-  const val = snapshot.val();
-  templates = (val && val.length) ? val : builtinTemplates();
+  const list = parseTemplatesSnapshot(snapshot.val());
+  tplDbCount = list.length;
+  templates = list.length ? list : builtinTemplates();
   firebaseSynced.templates = true;
   checkFirebaseReadyForJoin();
   render();
